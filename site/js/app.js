@@ -623,7 +623,7 @@ async function dealsPanel() {
         ${d.sold30 != null ? `<div class="m">${d.sold30} sold in 30 days${d.nm30 != null ? ` (${d.nm30} NM)` : ""}</div>` : ""}</a>
         <div class="p"><b>${money(d.low)}</b><a class="btn sm" href="${tcgUrl(d.pid)}" target="_blank" rel="noopener" style="margin-top:4px">Listings ↗</a></div></div>`; }).join("")
       || `<div class="empty">${D.deals.missing ? "Deals appear after the next daily price update." : "No deals right now."}</div>`}</div>
-    <p class="faint small" style="margin:8px 0 0">Cheapest TCGplayer listing vs market price, for things worth $5+ that ${D.deals.volume ? "sold at least once in the last 30 days" : "have a price today"}. The cheapest listing can be a played copy or have high shipping, so open the listings before you get excited. Updated daily (${esc(D.deals.as_of || "")}).</p>`;
+    <p class="faint small" style="margin:8px 0 0">Cheapest TCGplayer listing 20–50% under market, for things worth $5+${D.deals.volume ? " that sold in Near Mint in the last 30 days" : ""}. The cheapest listing can still be a played copy or carry high shipping, so open the listings before you buy. Updated daily (${esc(D.deals.as_of || "")}).</p>`;
   $("#dealSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; dealKind = b.dataset.k; dealsPanel(); };
 }
 

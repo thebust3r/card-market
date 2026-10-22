@@ -217,8 +217,8 @@ def sold_last_30(pid):
     out = {}
     for it in data.get("result") or []:
         n = sum(float(b.get("quantitySold") or 0) for b in it.get("buckets") or [])
-        cond = it.get("condition") or "?"
-        out[cond] = out.get(cond, 0) + int(n)
+        key = (it.get("variant") or "?", it.get("condition") or "?")
+        out[key] = out.get(key, 0) + int(n)
     return out
 
 
@@ -241,11 +241,14 @@ def find_deals(cands, n=60):
     out = []
     for pid, sub, gid, market, low in cands:
         v = volume.get(pid)
+        if v and any(var == sub for var, _ in v):
+            v = {k: n for k, n in v.items() if k[0] == sub}       # just this printing
         sold = sum(v.values()) if v else None
-        if have_volume and not sold:
-            continue          # nothing sold in a month: the "deal" is probably a stale listing
+        nm = sum(n for (_, cond), n in v.items() if cond == "Near Mint") if v else None
+        if have_volume and not nm:
+            continue          # no Near Mint copy sold in a month: likely a played copy or a stale market price
         out.append({"pid": pid, "sub": sub, "gid": gid, "market": market, "low": low,
-                    "off": round(1 - low / market, 3), "sold30": sold, "nm30": v.get("Near Mint") if v else None})
+                    "off": round(1 - low / market, 3), "sold30": sold, "nm30": nm})
     out.sort(key=lambda d: d["off"] * (min(d["sold30"], 30) if d["sold30"] else 3), reverse=True)
     return out[:n], have_volume
 
@@ -339,7 +342,8 @@ def main():
                 compacted.setdefault(pid, {})[sub] = pts
                 if series and series[-1][0] == date:
                     _, low, _ = pts[date]
-                    if series[-1][1] >= 5 and low and low <= series[-1][1] * .8:
+                    # 20–50% under market; deeper "discounts" are nearly always damaged copies
+                    if series[-1][1] >= 5 and low and series[-1][1] * .5 <= low <= series[-1][1] * .8:
                         deal_cands.append([pid, sub, gid, series[-1][1], low])
                 if series and series[-1][0] >= (today - dt.timedelta(days=10)).isoformat():
                     now = series[-1][1]
