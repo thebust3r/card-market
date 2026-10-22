@@ -1,0 +1,41 @@
+{
+  "name": "Card Market",
+  "identifier": "io.github.thebust3r.cardmarket.source",
+  "subtitle": "Pok\u00e9mon card comps",
+  "description": "The Card Market iPhone app. New builds show up here by themselves.",
+  "iconURL": "https://raw.githubusercontent.com/thebust3r/card-market/main/ios/CardMarket/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+  "website": "https://github.com/thebust3r/card-market",
+  "tintColor": "#ffc928",
+  "news": [],
+  "apps": [
+    {
+      "name": "Card Market",
+      "bundleIdentifier": "io.github.thebust3r.cardmarket",
+      "developerName": "thebust3r",
+      "subtitle": "Pok\u00e9mon card comps",
+      "localizedDescription": "Pok\u00e9mon card comps on the go: recent TCGplayer sales by condition on a graph, one-tap links to TCGplayer and eBay, price history with a rough forecast, box EV, and your collection.",
+      "iconURL": "https://raw.githubusercontent.com/thebust3r/card-market/main/ios/CardMarket/Assets.xcassets/AppIcon.appiconset/icon-1024.png",
+      "tintColor": "#ffc928",
+      "category": "utilities",
+      "versions": [
+        {
+          "version": "1.0.0",
+          "buildVersion": "1",
+          "date": "2026-10-22T17:11:40Z",
+          "downloadURL": "https://github.com/thebust3r/card-market/releases/download/app-1/CardMarket-1.0.0.ipa",
+          "size": 92072,
+          "minOSVersion": "15.0",
+          "localizedDescription": "Build 1"
+        }
+      ],
+      "version": "1.0.0",
+      "versionDate": "2026-10-22T17:11:40Z",
+      "downloadURL": "https://github.com/thebust3r/card-market/releases/download/app-1/CardMarket-1.0.0.ipa",
+      "size": 92072,
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {}
+      }
+    }
+  ]
+}
