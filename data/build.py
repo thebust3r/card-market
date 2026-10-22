@@ -142,15 +142,9 @@ def read_archive(day, tool):
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
-            # The archive sits behind a stricter CDN rule than the API; say why, then try curl once.
             body = e.read(300).decode("utf-8", "replace").replace("\n", " ")
-            log(f"  archive {day}: HTTP {e.code} (server {e.headers.get('Server')}, cf-ray {e.headers.get('CF-RAY')}): {body[:200]}")
-            if not shutil.which("curl"):
-                raise
-            r = subprocess.run(["curl", "-fsSL", "--retry", "2", "-A", UA, "-o", str(arc), "-w", "%{http_code}", url],
-                               capture_output=True, text=True, timeout=300)
-            if r.returncode != 0:
-                raise RuntimeError(f"curl also failed: HTTP {r.stdout.strip()} {r.stderr.strip()[:120]}")
+            log(f"  archive {day}: HTTP {e.code}: {body[:160]}")
+            raise
         kind, path = tool
         if kind == "7z":
             cmd = [path, "x", "-y", f"-o{tmp}", str(arc), f"{day}/3/*", "-r"]
@@ -249,7 +243,12 @@ def main():
     # first run, or new archive dates wanted: fill in the past from the archive
     done = set(meta.get("archive_days", []))
     want = [d for d in backfill_dates(today, a.backfill_days) if d.isoformat() not in done]
-    if want and not meta.get("archive_days"):
+    # TCGCSV took the archive offline in 2026 ("temporarily removed due to rising server
+    # costs"). Look once a week whether it's back; the app fills older history from
+    # TCGplayer's own sales history in the meantime.
+    checked = meta.get("archive_checked")
+    due = not checked or (today - dt.date.fromisoformat(checked)).days >= 7
+    if want and not meta.get("archive_days") and due:
         tool = extractor()
         if not tool:
             log("! no 7z/bsdtar: skipping history backfill")
@@ -258,6 +257,10 @@ def main():
             for d in want:
                 try:
                     rows = read_archive(d, tool)
+                except urllib.error.HTTPError as e:
+                    log(f"  archive {d}: HTTP {e.code}; not trying the other dates (checking again in a week)")
+                    checked = date
+                    break
                 except Exception as e:
                     log(f"  archive {d}: failed ({e})")
                     continue
@@ -328,7 +331,8 @@ def main():
     all_dates = {d for g in hist.values() for p in g.values() for s in p.values() for d in s}
     meta = {"generated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "as_of": date,
             "products": len(catalog), "sets": len(sets), "history_days": len(all_dates),
-            "first_date": min(all_dates) if all_dates else None, "archive_days": sorted(done)}
+            "first_date": min(all_dates) if all_dates else None, "archive_days": sorted(done),
+            "archive_checked": checked}
     (out / "meta.json").write_text(json.dumps(meta, indent=1))
     priced = sum(1 for c in catalog if c[7] is not None)
     log(f"Done: {len(catalog):,} products ({priced:,} priced) in {len(sets)} sets, "

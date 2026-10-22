@@ -1,6 +1,6 @@
 // App shell is cache-first (bumped by VERSION); /data is network-first with a
 // cache fallback so search still works with bad signal at a show; /api is never cached.
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL = ["/", "/index.html", "/css/app.css", "/js/app.js", "/js/forecast.js", "/manifest.webmanifest", "/icons/icon.svg", "/icons/icon-192.png"];
 
 self.addEventListener("install", e => {

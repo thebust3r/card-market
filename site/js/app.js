@@ -220,6 +220,18 @@ function compLinks(it) {
     ["PriceCharting", "https://www.pricecharting.com/search-products?type=prices&q=" + encodeURIComponent(q)]];
 }
 
+function historyPanel(it) {
+  const f = it.forecast, bt = it.backtest;
+  return `        <div class="head"><h2 class="sec">Price history</h2><div class="right"><div class="seg" id="rangeSeg">${["3m", "1y", "all"].map(r => `<button data-r="${r}" class="${r === range ? "on" : ""}">${{"3m": "3M", "1y": "1Y", all: "All"}[r]}</button>`).join("")}</div></div></div>
+        <div class="chart"><svg id="hist" role="img" aria-label="Market price history and estimate"></svg><div class="tip" id="htip" hidden></div></div>
+        <div class="legend"><span><span class="ln"></span>Market price</span>${f.ok ? '<span><span class="ln dash"></span>Estimate</span><span><span class="bandkey"></span>Likely range</span>' : ""}${it.dailyFrom ? `<span class="faint">Before ${esc(it.dailyFrom)}: weekly, from TCGplayer's sales history</span>` : ""}</div>
+        ${f.ok ? `<div class="fc">${f.points.map(p => `<div><div class="k">${p.label}</div><div class="v">${money(p.price)}</div><div class="r">${pct(p.change, true)} · ${money(p.low)}–${money(p.high)}</div></div>`).join("")}</div>
+          <p class="note" style="margin:12px 0 0">${sigPill(f)} Confidence <b>${f.confidence}</b>. Trend ≈ <b>${pct(f.trendPerYear, true)}</b>/yr, assumed to fade; it typically swings ±${(f.weeklySwing * 100).toFixed(1)}% a week.
+          ${bt ? `Check on the last month: it would have said ${money(bt.predicted)}, the real price was ${money(bt.actual)} (off ${(bt.error * 100).toFixed(0)}%, vs ${(bt.naiveError * 100).toFixed(0)}% for “no change”).` : ""}
+          Rough estimate from past prices, not financial advice.</p>`
+          : `<p class="note">${esc(f.reason)}</p>`}`;
+}
+
 async function pageCard(view, pid, sub) {
   view.innerHTML = '<div class="panel"><div class="skeleton" style="height:180px"></div></div>';
   const it = await item(pid, sub);
@@ -236,7 +248,7 @@ async function pageCard(view, pid, sub) {
             <h1>${esc(it.name)}</h1>
             <div class="price">${money(it.now)}</div>
             <div class="price-sub">TCGplayer market${it.sub !== "Normal" ? " · " + esc(it.sub) : ""}${it.asOf ? " · " + it.asOf : ""}${it.low ? ` · lowest listing ${money(it.low)}` : ""}</div>
-            <div class="deltas"><span class="delta"><span>7d</span>${pct(it.ch7)}</span><span class="delta"><span>30d</span>${pct(it.ch30)}</span><span class="delta"><span>1y</span>${pct(it.ch365)}</span></div>
+            <div class="deltas" id="deltas"><span class="delta"><span>7d</span>${pct(it.ch7)}</span><span class="delta"><span>30d</span>${pct(it.ch30)}</span><span class="delta"><span>1y</span>${pct(it.ch365)}</span></div>
           </div></div>
         <div class="linkbar">${compLinks(it).map(([l, u, c]) => `<a class="${c || ""}" href="${esc(u)}" target="_blank" rel="noopener">${l} ↗</a>`).join("")}</div>
         <div class="actions" style="margin-top:10px">
@@ -251,21 +263,11 @@ async function pageCard(view, pid, sub) {
         <div class="skeleton" style="height:200px"></div></div>
     </div>
     <div class="stack">
-      <div class="panel">
-        <div class="head"><h2 class="sec">Price history</h2><div class="right"><div class="seg" id="rangeSeg">${["3m", "1y", "all"].map(r => `<button data-r="${r}" class="${r === range ? "on" : ""}">${{"3m": "3M", "1y": "1Y", all: "All"}[r]}</button>`).join("")}</div></div></div>
-        <div class="chart"><svg id="hist" role="img" aria-label="Market price history and estimate"></svg><div class="tip" id="htip" hidden></div></div>
-        <div class="legend"><span><span class="ln"></span>Market price</span>${f.ok ? '<span><span class="ln dash"></span>Estimate</span><span><span class="bandkey"></span>Likely range</span>' : ""}</div>
-        ${f.ok ? `<div class="fc">${f.points.map(p => `<div><div class="k">${p.label}</div><div class="v">${money(p.price)}</div><div class="r">${pct(p.change, true)} · ${money(p.low)}–${money(p.high)}</div></div>`).join("")}</div>
-          <p class="note" style="margin:12px 0 0">${sigPill(f)} Confidence <b>${f.confidence}</b>. Trend ≈ <b>${pct(f.trendPerYear, true)}</b>/yr, assumed to fade; it typically swings ±${(f.weeklySwing * 100).toFixed(1)}% a week.
-          ${bt ? `Check on the last month: it would have said ${money(bt.predicted)}, the real price was ${money(bt.actual)} (off ${(bt.error * 100).toFixed(0)}%, vs ${(bt.naiveError * 100).toFixed(0)}% for “no change”).` : ""}
-          Rough estimate from past prices, not financial advice.</p>`
-          : `<p class="note">${esc(f.reason)}</p>`}
-      </div>
+      <div class="panel" id="histPanel">${historyPanel(it)}</div>
     </div>
   </div>`;
   if ($("#subSel")) $("#subSel").onchange = e => { location.hash = `#/card/${pid}/${encodeURIComponent(e.target.value)}`; };
-  $("#rangeSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; range = b.dataset.r;
-    [...$("#rangeSeg").children].forEach(x => x.classList.toggle("on", x === b)); drawHistory(it); };
+  bindHistory(it);
   $("#watchBtn").onclick = async () => {
     const on = !(ME.watch || []).some(w => w.pid === pid && w.sub === it.sub);
     try { await api("/watch", {pid, sub: it.sub, on}); } catch (e) { return toast(e.message); }
@@ -276,7 +278,35 @@ async function pageCard(view, pid, sub) {
   };
   $("#addBtn").onclick = () => addForm(it);
   drawHistory(it);
-  loadComps(it);
+  loadComps(it).finally(() => extendHistory(it));
+}
+
+function bindHistory(it) {
+  $("#rangeSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; range = b.dataset.r;
+    [...$("#rangeSeg").children].forEach(x => x.classList.toggle("on", x === b)); drawHistory(it); };
+}
+
+// Our own daily history only goes back to when the data job started. When it's short,
+// fill in the past year from TCGplayer's sales history (Near Mint market price per bucket).
+async function extendHistory(it) {
+  if (it.series.length && dayOf(it.asOf) - dayOf(it.series[0][0]) > 300) return;
+  let k;
+  try { k = await api(`/comps?pid=${it.pid}&range=annual`); } catch { return; }
+  let hist = k.history || [];
+  if (hist.some(h => h.variant === it.sub)) hist = hist.filter(h => h.variant === it.sub);
+  const nm = (hist.find(h => /near mint/i.test(h.condition)) || hist[0] || {buckets: []}).buckets.filter(b => b.market);
+  const first = it.series.length ? it.series[0][0] : "9999";
+  const older = nm.filter(b => b.date < first).map(b => [b.date, b.market]);
+  if (older.length < 2 || !$("#histPanel")) return;
+  it.dailyFrom = first === "9999" ? older[older.length - 1][0] : first;
+  it.series = [...older, ...it.series];
+  if (it.now == null) { it.now = it.series[it.series.length - 1][1]; it.asOf = it.series[it.series.length - 1][0]; }
+  Object.assign(it, {ch7: changeOver(it.series, 7), ch30: changeOver(it.series, 30), ch365: changeOver(it.series, 365),
+                     forecast: forecast(it.series), backtest: backtest(it.series)});
+  $("#histPanel").innerHTML = historyPanel(it);
+  if ($("#deltas")) $("#deltas").innerHTML = `<span class="delta"><span>7d</span>${pct(it.ch7)}</span><span class="delta"><span>30d</span>${pct(it.ch30)}</span><span class="delta"><span>1y</span>${pct(it.ch365)}</span>`;
+  bindHistory(it);
+  drawHistory(it);
 }
 
 function addForm(it) {
