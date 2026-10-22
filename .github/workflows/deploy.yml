@@ -57,7 +57,7 @@ jobs:
         if: steps.prices.outputs.built != '1'
         run: |
           mkdir -p site/data
-          cp -R prev/meta.json prev/sets.json prev/catalog.json prev/movers.json prev/set site/data/
+          cp -R prev/*.json prev/set site/data/
           du -sh site/data
 
       - name: Save the data for tomorrow

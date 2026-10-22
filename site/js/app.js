@@ -182,6 +182,7 @@ async function route() {
     if (page === "card") await pageCard(view, +parts[1], parts[2]);
     else if (page === "market") await pageMarket(view);
     else if (page === "ev") await pageEV(view, +parts[1] || null);
+    else if (page === "collection" && parts[1] === "sets") await pageSets(view, +parts[2] || null);
     else if (page === "collection") await pageCollection(view);
     else await pageHome(view);
   } catch (e) {
@@ -261,6 +262,7 @@ async function pageCard(view, pid, sub) {
       </div>
       <div class="panel" id="comps"><div class="head"><h2 class="sec">Recent sales <span class="faint" id="compsNote">asking TCGplayer…</span></h2></div>
         <div class="skeleton" style="height:200px"></div></div>
+      <div class="panel" id="sellPanel"></div>
     </div>
     <div class="stack">
       <div class="panel" id="histPanel">${historyPanel(it)}</div>
@@ -278,6 +280,7 @@ async function pageCard(view, pid, sub) {
   };
   $("#addBtn").onclick = () => addForm(it);
   drawHistory(it);
+  renderSell(it);
   loadComps(it).finally(() => extendHistory(it));
 }
 
@@ -359,8 +362,110 @@ async function loadComps(it) {
   const errs = [k.error, k.salesError && "individual sales: " + k.salesError, k.historyError && "sales history: " + k.historyError].filter(Boolean);
   if (errs.length) h += `<p class="warn">TCGplayer didn't answer everything (${esc(errs.join("; "))}). The links above still work.</p>`;
   if (!sales.length && nm.length < 2 && !errs.length) h += '<div class="empty">No recent TCGplayer sales for this one.</div>';
+  const sp = sellSpeed(hist);
+  if (sp) h += `<div class="speed"><span class="pill ${sp.cls}">${sp.label}</span> <b>${sp.total}</b> sold on TCGplayer in the last 30 days${sp.parts ? ` <span class="faint">(${sp.parts})</span>` : ""}. ${sp.note}</div>`;
   el.innerHTML = h;
   drawSales(sales, nm);
+  const nmSales = sales.filter(s => s.condition === "Near Mint").slice(0, 10).map(s => s.price);
+  it.nmMedian = nmSales.length >= 3 ? med(nmSales) : null;
+  it.speed = sp;
+  if ($("#sellPanel")) renderSell(it);
+}
+
+// Copies sold in the last 30 days, per condition, from the sales-history buckets.
+function sellSpeed(hist) {
+  if (!hist.length) return null;
+  const cut = Date.now() / DAY - 30, by = [];
+  for (const h of hist) {
+    const n = h.buckets.filter(b => dayOf(b.date) >= cut).reduce((a, b) => a + (b.sold || 0), 0);
+    if (n) by.push([COND_SHORT(h.condition), n]);
+  }
+  const total = by.reduce((a, b) => a + b[1], 0);
+  const [label, cls, note] = total >= 30 ? ["Sells fast", "up", "A fair price should sell within days."]
+    : total >= 8 ? ["Sells steadily", "flat", "Expect a week or two at a fair price."]
+    : total >= 1 ? ["Sells slowly", "down", "Few buyers: price to sell, or expect to wait."]
+    : ["No recent sales", "down", "Nobody bought one in a month; comps may be stale."];
+  return {total, label, cls, note, parts: by.length > 1 ? by.sort((a, b) => b[1] - a[1]).map(([c, n]) => `${c} ${n}`).join(" · ") : ""};
+}
+
+// ================================================================ sell + grade
+// Seller fees as of 2026. They change now and then; the note under the table says which ones are used.
+const FEES = {
+  tcg: {name: "TCGplayer", pct: .1075 + .025, flat: .30, note: "10.75% commission + 2.5% + $0.30 payment processing"},
+  ebay: {name: "eBay", pct: .1325, flat: null, note: "13.25% of the total + $0.30 per order ($0.40 over $10)"},
+  pp: {name: "PayPal / Venmo (goods & services)", pct: .0349, flat: .49, note: "3.49% + $0.49"},
+  cash: {name: "Cash at a show", pct: 0, flat: 0, note: "no fees"},
+};
+let sellTab = "sell";
+function renderSell(it) {
+  const box = $("#sellPanel"); if (!box) return;
+  const head = `<div class="head"><h2 class="sec">Sell or grade</h2><div class="right"><div class="seg" id="sellSeg">
+    <button data-t="sell" class="${sellTab === "sell" ? "on" : ""}">Sell</button><button data-t="grade" class="${sellTab === "grade" ? "on" : ""}">Grade</button></div></div></div>`;
+  box.innerHTML = head + `<div id="sellBody"></div>`;
+  $("#sellSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; sellTab = b.dataset.t; renderSell(it); };
+  sellTab === "sell" ? sellBody(it) : gradeBody(it);
+}
+function sellBody(it) {
+  const body = $("#sellBody");
+  const suggest = it.nmMedian || it.now;
+  const st = store.get("sell", {});
+  const price = st.pid === it.pid && st.price ? st.price : suggest ? +suggest.toFixed(2) : "";
+  const ship = st.ship ?? (price && price < 20 ? 1 : 5);
+  body.innerHTML = `<div class="form">
+      <div class="field"><label for="sPrice">Sale price ($)</label><input class="input" id="sPrice" type="number" step="0.01" min="0" inputmode="decimal" value="${price}"></div>
+      <div class="field"><label for="sShip">Your shipping cost ($)</label><input class="input" id="sShip" type="number" step="0.01" min="0" inputmode="decimal" value="${ship}"></div>
+    </div>
+    <p class="note" style="margin:8px 0">${it.nmMedian ? `Recent Near Mint sales: median ${money(it.nmMedian)}. List around there to sell at a normal pace, a little under to sell fast.` : `Market price ${money(it.now)}.`}
+      ${it.speed ? ` ${esc(it.speed.label)} (${it.speed.total} sold in 30 days).` : ""}</p>
+    <div class="scroll-x"><table class="t" id="sTable"></table></div>
+    <p class="faint small" style="margin:8px 0 0">Shipping: about $1 for a plain envelope, $5 tracked. Fees used: ${Object.values(FEES).filter(f => f.pct).map(f => `${f.name} ${f.note}`).join("; ")}. Dealers at shows usually pay 60–80% of market in cash, more in trade.</p>`;
+  const calc = save => {
+    const p = +$("#sPrice").value || 0, sh = +$("#sShip").value || 0;
+    if (save) store.set("sell", {pid: it.pid, price: p, ship: sh});
+    const rows = Object.entries(FEES).map(([k, f]) => {
+      const flat = f.flat ?? (p > 10 ? .40 : .30), fee = p ? p * f.pct + flat : 0, ship = k === "cash" ? 0 : sh, net = p - fee - ship;
+      return `<tr><td>${f.name}</td><td class="num">${money(fee)}</td><td class="num"><b>${money(net)}</b></td><td class="num faint">${p ? Math.round(net / p * 100) + "%" : ""}</td></tr>`;
+    });
+    $("#sTable").innerHTML = `<thead><tr><th>Where</th><th class="num">Fees</th><th class="num">You keep</th><th class="num"></th></tr></thead><tbody>${rows.join("")}</tbody>`;
+  };
+  body.oninput = () => calc(true);
+  calc(false);
+}
+function gradeBody(it) {
+  const body = $("#sellBody");
+  if (it.sealed) { body.innerHTML = '<p class="note">Grading is for single cards.</p>'; return; }
+  const key = "grade:" + it.pid, g = {raw: +(it.nmMedian || it.now || 0).toFixed(2), p10: "", p9: "", p8: "", c10: 30, c9: 50, fee: 25, ship: 6, sellPct: 13.25, ...store.get(key, {})};
+  const name = it.name.split(" - ")[0], n = (it.number || "").split("/")[0].replace(/^0+/, "");
+  const ebay = grade => "https://www.ebay.com/sch/i.html?LH_Sold=1&LH_Complete=1&_nkw=" + encodeURIComponent(`pokemon ${name} ${n} ${grade}`);
+  const f = (k, label, extra = 'step="0.01"') => `<div class="field"><label for="g_${k}">${label}</label><input class="input" id="g_${k}" data-g="${k}" type="number" min="0" inputmode="decimal" ${extra} value="${g[k]}"></div>`;
+  body.innerHTML = `<div class="form">
+      ${f("raw", "Raw value ($)")}${f("p10", "PSA 10 value ($)")}${f("p9", "PSA 9 value ($)")}${f("p8", "PSA 8 value ($)")}
+      ${f("c10", "Chance of a 10 (%)", 'step="1" max="100"')}${f("c9", "Chance of a 9 (%)", 'step="1" max="100"')}
+      ${f("fee", "Grading fee ($)")}${f("ship", "Shipping + insurance ($)")}
+    </div>
+    <div class="linkbar" style="margin-top:10px"><a href="${ebay("PSA 10")}" target="_blank" rel="noopener">PSA 10 sold ↗</a><a href="${ebay("PSA 9")}" target="_blank" rel="noopener">PSA 9 sold ↗</a><a href="${ebay("PSA 8")}" target="_blank" rel="noopener">PSA 8 sold ↗</a></div>
+    <div id="gOut" style="margin-top:12px"></div>
+    <p class="faint small" style="margin:8px 0 0">Gem rates vary a lot by set and by how clean your copy is; 30% is a rough modern-pack-fresh guess. Anything below a 9 is valued at the PSA 8 price (or raw if empty). Values are after ${g.sellPct}% selling fees.</p>`;
+  const calc = save => {
+    for (const i of body.querySelectorAll("[data-g]")) g[i.dataset.g] = i.value === "" ? "" : +i.value;
+    if (save) store.set(key, g);
+    const keep = 1 - g.sellPct / 100, c10 = Math.min(1, (+g.c10 || 0) / 100), c9 = Math.min(1 - c10, (+g.c9 || 0) / 100), rest = 1 - c10 - c9;
+    const v8 = g.p8 === "" ? +g.raw : +g.p8, cost = (+g.fee || 0) + (+g.ship || 0), rawNet = (+g.raw || 0) * keep;
+    if (g.p10 === "") { $("#gOut").innerHTML = '<p class="note">Add what a PSA 10 sells for (tap “PSA 10 sold”) to see if it\'s worth grading.</p>'; return; }
+    const v9 = g.p9 === "" ? v8 : +g.p9;
+    const ev = (c10 * g.p10 + c9 * v9 + rest * v8) * keep - cost;
+    const at = v => v * keep - cost - rawNet;
+    const breakEven = g.p10 * keep - v8 * keep > 0 ? Math.max(0, (rawNet + cost - (c9 * v9 + (1 - c9) * v8) * keep) / ((g.p10 - v8) * keep)) : null;
+    const gain = ev - rawNet, verdict = gain > cost * .5 ? ["Worth grading", "up"] : gain > 0 ? ["Marginal", "flat"] : ["Sell it raw", "down"];
+    $("#gOut").innerHTML = `<div class="ev-big">
+        <div><div class="k">Sell raw</div><div class="v">${money(rawNet)}</div><div class="faint small">after fees</div></div>
+        <div><div class="k">Grade, on average</div><div class="v">${money(ev)}</div><div class="faint small">after grading + fees</div></div>
+        <div><div class="k">Difference</div><div class="v ${verdict[1]}">${signed(gain)}</div><div class="faint small">${verdict[0]}</div></div></div>
+      <p class="note" style="margin:10px 0 0">If it gets a 10: ${signed(at(+g.p10))}. A 9: ${signed(at(v9))}. Lower: ${signed(at(v8))}.
+        ${breakEven == null ? "" : breakEven <= 0 ? "It pays off on average even without a 10." : breakEven >= 1 ? "Even a sure 10 wouldn't beat selling raw." : `It pays off on average if your chance of a 10 is over <b>${Math.round(breakEven * 100)}%</b>.`}</p>`;
+  };
+  body.oninput = () => calc(true);
+  calc(false);
 }
 
 // ================================================================ charts
@@ -493,12 +598,33 @@ async function pageMarket(view) {
         <div class="m">7d ${pct(i.ch7)} · 30d ${pct(i.ch30)} ${sigPill(i.forecast)}</div></div>
         <div class="p"><b>${money(i.now)}</b><span class="faint">${i.forecast.ok ? "1y ~" + money(i.forecast.points[3].price) : ""}</span></div></a>`).join("")
       : '<div class="empty">Open any card and press “Watch” to follow it here.</div>'}</div></div>
+    <div class="panel" id="deals"><h2 class="sec">Deals right now</h2><div class="skeleton" style="height:80px"></div></div>
     <div class="head"><h2 class="sec">Biggest moves</h2><div class="right"><div class="seg" id="mvSeg"><button data-s="d7" class="${moverSpan === "d7" ? "on" : ""}">7 days</button><button data-s="d30" class="${moverSpan === "d30" ? "on" : ""}">30 days</button></div></div></div>
     <div id="movers">${moversPanel(moverSpan, 25)}</div>
     <p class="faint small">Moves cover every Pokémon product worth $5 or more. Estimates are rough guesses from past prices, not financial advice.</p>
   </div>`;
+  dealsPanel();
   $("#mvSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; moverSpan = b.dataset.s;
     [...$("#mvSeg").children].forEach(x => x.classList.toggle("on", x === b)); $("#movers").innerHTML = moversPanel(moverSpan, 25); };
+}
+
+let dealKind = "cards";
+async function dealsPanel() {
+  const el = $("#deals"); if (!el) return;
+  if (!D.deals) D.deals = await getJSON("/data/deals.json").catch(() => ({deals: [], volume: false, missing: true}));
+  const all = D.deals.deals.filter(d => D.byPid.has(d.pid));
+  const list = all.filter(d => (dealKind === "sealed") === !!D.byPid.get(d.pid).sealed);
+  el.innerHTML = `<div class="head"><h2 class="sec">Deals right now</h2><div class="right"><div class="seg" id="dealSeg">
+      <button data-k="cards" class="${dealKind === "cards" ? "on" : ""}">Cards</button><button data-k="sealed" class="${dealKind === "sealed" ? "on" : ""}">Sealed</button></div></div></div>
+    <div class="list">${list.slice(0, 25).map(d => { const c = D.byPid.get(d.pid);
+      return `<div class="prow">${thumb(d.pid, "sm")}<a class="t" href="#/card/${d.pid}/${encodeURIComponent(d.sub)}" style="text-decoration:none">
+        <div class="n">${esc(c.name)}</div><div class="m">${esc(D.sets.get(d.gid)?.name || "")}${d.sub !== "Normal" ? " · " + esc(d.sub) : ""}</div>
+        <div class="m"><span class="up">${Math.round(d.off * 100)}% under</span> market ${money(d.market)}</div>
+        ${d.sold30 != null ? `<div class="m">${d.sold30} sold in 30 days${d.nm30 != null ? ` (${d.nm30} NM)` : ""}</div>` : ""}</a>
+        <div class="p"><b>${money(d.low)}</b><a class="btn sm" href="${tcgUrl(d.pid)}" target="_blank" rel="noopener" style="margin-top:4px">Listings ↗</a></div></div>`; }).join("")
+      || `<div class="empty">${D.deals.missing ? "Deals appear after the next daily price update." : "No deals right now."}</div>`}</div>
+    <p class="faint small" style="margin:8px 0 0">Cheapest TCGplayer listing vs market price, for things worth $5+ that ${D.deals.volume ? "sold at least once in the last 30 days" : "have a price today"}. The cheapest listing can be a played copy or have high shipping, so open the listings before you get excited. Updated daily (${esc(D.deals.as_of || "")}).</p>`;
+  $("#dealSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; dealKind = b.dataset.k; dealsPanel(); };
 }
 
 // ================================================================ box EV
@@ -536,8 +662,20 @@ async function boxEV(pid, rates, packs) {
   const n = packs || (prod && prod[5]) || null;
   const sealedPrice = mainPrice(pid);
   const total = n ? evPack * n : null;
-  return {pid, name: row.name, set: D.sets.get(row.gid), packs: n, sealedPrice, evPack, total, ratio: total && sealedPrice ? total / sealedPrice : null,
+  const sealedList = s.products.filter(p => p[4]).map(([id, name, , , , packs]) => ({id, name, packs, price: mainPrice(id)}));
+  return {pid, name: row.name, set: D.sets.get(row.gid), packs: n, sealedList, sealedPrice, evPack, total, ratio: total && sealedPrice ? total / sealedPrice : null,
           revAvg, rows, top: top.filter(t => t.perPack < 1 && t.price >= 1).slice(0, 12), priced: [...byR.values()].reduce((a, c) => a + c.length, 0)};
+}
+// Every sealed product in the set with a known pack count, cheapest per pack first.
+function packsTable(e) {
+  const rows = e.sealedList.filter(x => x.packs && x.price).map(x => ({...x, per: x.price / x.packs})).sort((a, b) => a.per - b.per);
+  if (!rows.length) return '<div class="empty">No sealed products with a known pack count in this set.</div>';
+  return `<div class="scroll-x"><table class="t"><thead><tr><th>Product</th><th class="num">Per pack</th><th class="num">EV ÷ price</th></tr></thead><tbody>
+    ${rows.map((x, i) => `<tr${x.id === e.pid ? ' class="hl"' : ""}><td><a href="#/ev/${x.id}">${esc(x.name.replace(e.set?.name || "\u0000", "").replace(/^\s*[-–:]\s*/, "") || x.name)}</a>${i === 0 ? ' <span class="pill up">cheapest</span>' : ""}
+      <div class="faint small">${money(x.price)} · ${x.packs} pack${x.packs > 1 ? "s" : ""}</div></td>
+      <td class="num"><b>${money(x.per)}</b></td>
+      <td class="num">${e.evPack ? (e.evPack / x.per).toFixed(2) + "×" : "–"}</td></tr>`).join("")}</tbody></table></div>
+    <p class="faint small" style="margin:8px 0 0">Pack counts come from TCGplayer's product descriptions. EV ÷ price above 1 means the pulls are worth more than you paid on average. ETBs and collections also include promos, sleeves and dice that aren't counted.</p>`;
 }
 let evState = {rates: {}, packs: null};
 async function pageEV(view, pid) {
@@ -575,7 +713,8 @@ async function pageEV(view, pid) {
       <div class="actions" style="margin-top:10px"><button class="btn primary" id="evApply">Recalculate</button><span class="faint small">Per pack = cards of that rarity in an average pack (0.0116 ≈ 1 in 86).</span></div></div>
     <div class="panel"><h2 class="sec">Chase cards</h2><div class="list">${e.top.map(t => `<a class="prow" href="#/card/${t.id}/">${thumb(t.id, "sm")}
       <div class="t"><div class="n">${esc(t.name)}</div><div class="m">${esc(t.rarity)} · 1 in ${Math.round(1 / t.perPack).toLocaleString()} packs${e.packs ? ` · ${Math.min(99, (1 - Math.pow(1 - t.perPack, e.packs)) * 100).toFixed(0)}% per box` : ""}</div></div>
-      <div class="p"><b>${money(t.price)}</b></div></a>`).join("") || '<div class="empty">No priced chase cards yet.</div>'}</div></div></div>`;
+      <div class="p"><b>${money(t.price)}</b></div></a>`).join("") || '<div class="empty">No priced chase cards yet.</div>'}</div></div>
+    <div class="panel"><h2 class="sec">Cheapest packs in ${esc(e.set?.name || "this set")}</h2>${packsTable(e)}</div></div>`;
   $("#evApply").onclick = () => {
     for (const i of out.querySelectorAll("[data-rarity]")) if (i.value !== "") evState.rates[i.dataset.rarity] = +i.value;
     evState.packs = +$("#evPacks").value || null;
@@ -599,7 +738,7 @@ async function pageCollection(view) {
     const y = !c.grade && it?.forecast.ok ? it.forecast.points[3].price : each;
     year += (y || 0) * c.qty;
   }
-  view.innerHTML = `<div class="stack"><h1 class="page">Collection</h1>
+  view.innerHTML = `<div class="stack">${collHead("mine")}
     <div class="stats">
       <div class="stat"><div class="k">Items</div><div class="v">${count}</div><div class="s">${unpriced ? unpriced + " without a value" : " "}</div></div>
       <div class="stat"><div class="k">Value now</div><div class="v">${money(value)}</div><div class="s">raw market prices</div></div>
@@ -648,6 +787,68 @@ async function pageCollection(view) {
       if (d.dataset.sure !== "1") { d.dataset.sure = "1"; d.textContent = "Tap again to remove"; return; }
       try { await api("/collection", {action: "delete", id: +d.dataset.del}); toast("Removed"); pageCollection(view); } catch (err) { toast(err.message); }
     }
+  };
+}
+
+const collHead = on => `<div class="head" style="margin:0"><h1 class="page" style="margin:0">Collection</h1><div class="right"><div class="seg">
+  <a href="#/collection" class="${on === "mine" ? "on" : ""}">My cards</a><a href="#/collection/sets${store.get("setGid", null) ? "/" + store.get("setGid") : ""}" class="${on === "sets" ? "on" : ""}">Set tracker</a></div></div></div>`;
+
+// ================================================================ set tracker
+let setScope = store.get("setScope", "main");
+async function pageSets(view, gid) {
+  if (gid) store.set("setGid", gid);
+  const sets = [...D.sets.values()].sort((a, b) => (b.published || "").localeCompare(a.published || ""));
+  view.innerHTML = `<div class="stack">${collHead("sets")}
+    <div class="panel"><p class="note" style="margin-top:0">Pick a set to see what you own, what's missing, and what the rest costs. Cards count as owned when they're in your collection.</p>
+      <input class="input" id="setQ" type="search" placeholder="Search sets, e.g. “prismatic” or “151”" autocomplete="off" aria-label="Search sets">
+      <div class="list" id="setRes"></div></div>
+    <div id="setOut"></div></div>`;
+  const showSets = v => { v = v.toLowerCase().trim();
+    $("#setRes").innerHTML = (v ? sets.filter(x => (x.name + " " + x.abbr).toLowerCase().includes(v)) : gid ? [] : sets).slice(0, v ? 30 : 8)
+      .map(x => `<a class="prow" href="#/collection/sets/${x.gid}"><div class="t"><div class="n">${esc(x.name)}</div><div class="m">${esc(x.abbr || "")}${x.published ? " · " + esc(x.published.slice(0, 4)) : ""}</div></div></a>`).join(""); };
+  $("#setQ").oninput = () => showSets($("#setQ").value);
+  showSets("");
+  if (!gid) return;
+  const out = $("#setOut");
+  out.innerHTML = '<div class="panel"><div class="skeleton" style="height:160px"></div></div>';
+  await refreshMe();
+  const sf = await setFile(gid), set = D.sets.get(gid);
+  const owned = new Set((ME.collection || []).map(c => c.pid));
+  const priceOf = id => { const l = sf.latest[id] || {}; let best = null;   // cheapest printing that isn't a reverse holo
+    for (const [sub, v] of Object.entries(l)) if (sub !== "Reverse Holofoil" && v[1] && (best == null || v[1] < best[1])) best = [sub, v[1]];
+    return best || (l["Reverse Holofoil"] ? ["Reverse Holofoil", l["Reverse Holofoil"][1]] : [null, null]); };
+  const numOf = n => { const m = /^(\d+)\s*\/\s*(\d+)/.exec(n || ""); return m ? [+m[1], +m[2]] : [null, null]; };
+  let cards = sf.products.filter(p => !p[4] && p[2]).map(([id, name, number, rarity]) => {
+    const [n, of] = numOf(number), [sub, price] = priceOf(id);
+    return {id, name, number, rarity, n, of, sub, price, have: owned.has(id)};
+  });
+  const printed = cards.reduce((a, c) => c.of && (!a || c.of < a) ? c.of : a, null);
+  const secret = cards.filter(c => printed && c.n > printed).length;
+  if (setScope === "main" && printed) cards = cards.filter(c => !c.n || c.n <= printed);
+  cards.sort((a, b) => (a.n ?? 1e9) - (b.n ?? 1e9) || a.number.localeCompare(b.number));
+  const have = cards.filter(c => c.have), miss = cards.filter(c => !c.have).sort((a, b) => (a.price ?? 1e9) - (b.price ?? 1e9));
+  const missCost = miss.reduce((a, c) => a + (c.price || 0), 0), unpriced = miss.filter(c => c.price == null).length;
+  const pctDone = cards.length ? have.length / cards.length : 0;
+  out.innerHTML = `<div class="stack"><div class="panel">
+      <div class="head"><h2 class="sec">${esc(set?.name || "Set")}</h2><div class="right"><div class="seg" id="scopeSeg">
+        <button data-s="main" class="${setScope === "main" ? "on" : ""}">Main set${printed ? " (" + printed + ")" : ""}</button><button data-s="all" class="${setScope === "all" ? "on" : ""}">Everything${secret ? " (+" + secret + ")" : ""}</button></div></div></div>
+      <div class="progress"><i style="width:${(pctDone * 100).toFixed(1)}%"></i></div>
+      <div class="stats" style="margin-top:12px">
+        <div class="stat"><div class="k">Have</div><div class="v">${have.length}/${cards.length}</div><div class="s">${Math.round(pctDone * 100)}% done</div></div>
+        <div class="stat"><div class="k">To finish</div><div class="v">${money(missCost)}</div><div class="s">${unpriced ? unpriced + " unpriced, " : ""}cheapest printings</div></div>
+      </div>
+      <p class="faint small" style="margin:10px 0 0">Reverse holos aren't counted separately. “Have it” adds a card to your collection (no price paid); edit it there.</p></div>
+    <div class="panel"><h2 class="sec">Missing, cheapest first</h2><div class="list">${miss.map(c => `<div class="prow">${thumb(c.id, "sm")}
+      <a class="t" href="#/card/${c.id}/${encodeURIComponent(c.sub || "")}" style="text-decoration:none"><div class="n">${esc(c.name)}</div><div class="m">#${esc(c.number)}${c.rarity ? " · " + esc(c.rarity) : ""}</div></a>
+      <div class="p"><b>${money(c.price)}</b><button class="btn sm" data-have="${c.id}" data-sub="${esc(c.sub || "Normal")}" style="margin-top:4px">Have it</button></div></div>`).join("") || '<div class="empty">Complete! 🎉</div>'}</div></div>
+    ${have.length ? `<div class="panel"><h2 class="sec">Have (${have.length})</h2><div class="list">${have.map(c => `<a class="prow" href="#/card/${c.id}/${encodeURIComponent(c.sub || "")}">${thumb(c.id, "sm")}
+      <div class="t"><div class="n">${esc(c.name)}</div><div class="m">#${esc(c.number)}</div></div><div class="p"><b>${money(c.price)}</b></div></a>`).join("")}</div></div>` : ""}</div>`;
+  $("#scopeSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; setScope = b.dataset.s; store.set("setScope", setScope); pageSets(view, gid); };
+  out.onclick = async e => {
+    const b = e.target.closest("[data-have]"); if (!b) return;
+    b.disabled = true;
+    try { await api("/collection", {action: "add", pid: +b.dataset.have, sub: b.dataset.sub, qty: 1}); toast("Added to collection"); pageSets(view, gid); }
+    catch (err) { b.disabled = false; toast(err.message); }
   };
 }
 

@@ -20,6 +20,7 @@ Only uses the Python standard library.
 import argparse
 import datetime as dt
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -35,6 +36,8 @@ BASE = "https://tcgcsv.com/tcgplayer/3"          # category 3 = Pokémon
 ARCHIVE = "https://tcgcsv.com/archive/tcgplayer/prices-{}.ppmd.7z"
 ARCHIVE_START = dt.date(2024, 2, 8)
 UA = "CardMarket/2.0 (personal price tracker; github actions)"
+TCG_HISTORY = "https://infinite-api.tcgplayer.com/price/history/{}/detailed?range=month"
+BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 DAILY_DAYS = 40         # keep every day this far back, then one point a week
 PACKS_BY_NAME = [("booster box case", 216), ("booster box", 36), ("booster display", 36),
                  ("elite trainer box", 9), ("booster bundle", 6), ("build & battle", 4),
@@ -205,6 +208,48 @@ def change_over(series, days):
     return round(series[-1][1] / best[1] - 1, 4) if best else None
 
 
+def sold_last_30(pid):
+    """{condition: copies sold} over the last ~30 days, from TCGplayer's own sales history."""
+    req = urllib.request.Request(TCG_HISTORY.format(pid), headers={
+        "User-Agent": BROWSER_UA, "Accept": "application/json", "Origin": "https://www.tcgplayer.com"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read())
+    out = {}
+    for it in data.get("result") or []:
+        n = sum(float(b.get("quantitySold") or 0) for b in it.get("buckets") or [])
+        cond = it.get("condition") or "?"
+        out[cond] = out.get(cond, 0) + int(n)
+    return out
+
+
+def find_deals(cands, n=60):
+    """cands: [pid, sub, gid, market, low]. Keep listings well under market that still sell."""
+    cands.sort(key=lambda c: (c[3] - c[4]) * min(1, c[3] / 40), reverse=True)
+    cands = cands[:240]
+    volume, failed = {}, 0
+    def one(pid):
+        nonlocal failed
+        try:
+            volume[pid] = sold_last_30(pid)
+        except Exception:
+            failed += 1
+        time.sleep(.2)
+    with ThreadPoolExecutor(4) as ex:
+        list(ex.map(one, sorted({c[0] for c in cands})))
+    log(f"Deals: {len(cands)} candidates, sales volume for {len(volume)} ({failed} failed)")
+    have_volume = len(volume) > len(cands) // 3
+    out = []
+    for pid, sub, gid, market, low in cands:
+        v = volume.get(pid)
+        sold = sum(v.values()) if v else None
+        if have_volume and not sold:
+            continue          # nothing sold in a month: the "deal" is probably a stale listing
+        out.append({"pid": pid, "sub": sub, "gid": gid, "market": market, "low": low,
+                    "off": round(1 - low / market, 3), "sold30": sold, "nm30": v.get("Near Mint") if v else None})
+    out.sort(key=lambda d: d["off"] * (min(d["sold30"], 30) if d["sold30"] else 3), reverse=True)
+    return out[:n], have_volume
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -270,7 +315,7 @@ def main():
                         add_point(hist, gid, r, d.isoformat())
 
     # write per-set files and gather catalog / movers
-    sets, catalog, moves7, moves30 = [], [], [], []
+    sets, catalog, moves7, moves30, deal_cands = [], [], [], [], []
     group_by_id = {g["groupId"]: g for g in groups}
     for g in sorted(groups, key=lambda g: g.get("publishedOn") or "", reverse=True):
         gid = g["groupId"]
@@ -292,6 +337,10 @@ def main():
                 subs[sub] = pts
                 series = sorted((d, v[0]) for d, v in pts.items())
                 compacted.setdefault(pid, {})[sub] = pts
+                if series and series[-1][0] == date:
+                    _, low, _ = pts[date]
+                    if series[-1][1] >= 5 and low and low <= series[-1][1] * .8:
+                        deal_cands.append([pid, sub, gid, series[-1][1], low])
                 if series and series[-1][0] >= (today - dt.timedelta(days=10)).isoformat():
                     now = series[-1][1]
                     c7, c30 = change_over(series, 7), change_over(series, 30)
@@ -324,6 +373,8 @@ def main():
         return {"up": [fmt(m) for m in reversed(moves[-n:]) if m[5] > 0],
                 "down": [fmt(m) for m in moves[:n] if m[5] < 0]}
 
+    deals, volume_ok = find_deals(deal_cands) if os.environ.get("CARD_MARKET_DEALS", "1") == "1" else ([], False)
+    (out / "deals.json").write_text(json.dumps({"as_of": date, "volume": volume_ok, "deals": deals}, separators=(",", ":")))
     (out / "sets.json").write_text(json.dumps(sets, separators=(",", ":")))
     (out / "catalog.json").write_text(json.dumps(catalog, separators=(",", ":")))
     (out / "movers.json").write_text(json.dumps({"as_of": date, "d7": top(moves7), "d30": top(moves30)},

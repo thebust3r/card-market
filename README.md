@@ -11,7 +11,12 @@ so they always match.
 - **Market**: your watchlist plus the biggest 7-day and 30-day moves across every product worth $5 or more.
 - **Box EV**: what the cards in a booster box, ETB or bundle are worth on average against its sealed
   price. You can edit the pull rates.
-- **Collection**: what you own, what you paid, what it's worth now, and CSV export.
+- **Sell speed, sell helper and grading calculator** on every card: how many sold in the last 30 days,
+  what you keep after TCGplayer, eBay or PayPal fees, and whether grading pays off.
+- **Deals**: daily list of listings well under market price for things that still sell.
+- **Cheapest packs**: cost per pack across every sealed product in a set, next to Box EV.
+- **Collection**: what you own, what you paid, what it's worth now, CSV export, and a set tracker
+  (what's missing from a set and what it costs to finish).
 
 Search works offline with bad signal at a show. Comps need a connection.
 

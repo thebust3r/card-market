@@ -165,6 +165,12 @@ h2.sec .faint { font: 400 13px var(--body); }
 .seg { display: inline-flex; background: var(--panel-2); border-radius: 10px; padding: 3px; }
 .seg button { border: 0; background: transparent; padding: 5px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink-3); }
 .seg button.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.seg a { padding: 5px 10px; border-radius: 8px; font-size: 13px; font-weight: 600; color: var(--ink-3); text-decoration: none; }
+.seg a.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.12); }
+.progress { height: 10px; border-radius: 99px; background: var(--panel-2); overflow: hidden; margin-top: 4px; }
+.progress i { display: block; height: 100%; background: var(--accent); border-radius: 99px; }
+.speed { margin-top: 12px; font-size: 14px; color: var(--ink-2); line-height: 1.5; }
+table.t tr.hl td { background: var(--panel-2); }
 .fc { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 12px; }
 @media (max-width: 560px) { .fc { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .fc > div { border: 1px solid var(--line); border-radius: 12px; padding: 9px 10px; }
