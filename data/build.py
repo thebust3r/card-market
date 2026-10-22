@@ -134,14 +134,23 @@ def read_archive(day, tool):
     """{groupId: [price rows]} for Pokémon on `day`, or None if missing."""
     with tempfile.TemporaryDirectory() as tmp:
         arc = Path(tmp) / "a.7z"
-        req = urllib.request.Request(ARCHIVE.format(day.isoformat()), headers={"User-Agent": UA})
+        url = ARCHIVE.format(day.isoformat())
+        req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*"})
         try:
             with urllib.request.urlopen(req, timeout=180) as r, open(arc, "wb") as f:
                 shutil.copyfileobj(r, f, 1 << 20)
         except urllib.error.HTTPError as e:
             if e.code == 404:
                 return None
-            raise
+            # The archive sits behind a stricter CDN rule than the API; say why, then try curl once.
+            body = e.read(300).decode("utf-8", "replace").replace("\n", " ")
+            log(f"  archive {day}: HTTP {e.code} (server {e.headers.get('Server')}, cf-ray {e.headers.get('CF-RAY')}): {body[:200]}")
+            if not shutil.which("curl"):
+                raise
+            r = subprocess.run(["curl", "-fsSL", "--retry", "2", "-A", UA, "-o", str(arc), "-w", "%{http_code}", url],
+                               capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                raise RuntimeError(f"curl also failed: HTTP {r.stdout.strip()} {r.stderr.strip()[:120]}")
         kind, path = tool
         if kind == "7z":
             cmd = [path, "x", "-y", f"-o{tmp}", str(arc), f"{day}/3/*", "-r"]
