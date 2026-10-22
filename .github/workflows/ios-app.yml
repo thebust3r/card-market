@@ -1,0 +1,83 @@
+# Builds the iPhone app (a full-screen window onto the Card Market site) on a Mac, unsigned.
+# AltStore signs it with your own Apple ID when you install it. The app loads the live site,
+# so new features show up without a new build; this only needs to run when ios/ changes.
+name: iPhone app
+
+on:
+  push:
+    branches: [main]
+    paths: ["ios/**", ".github/workflows/ios-app.yml", ".github/scripts/altstore_source.py"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version and site address
+        id: v
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          v=$(tr -d ' \n' < ios/VERSION)
+          site="$SITE_URL"
+          if [ -z "$site" ] && [ -n "$CLOUDFLARE_API_TOKEN" ]; then
+            sub=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/card-market" | jq -r '.result.subdomain // empty' || true)
+            [ -n "$sub" ] && site="https://$sub"
+          fi
+          site=${site:-https://card-market.pages.dev}
+          echo "Site: $site"
+          sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: '$v'/; s/CURRENT_PROJECT_VERSION: .*/CURRENT_PROJECT_VERSION: '${{ github.run_number }}'/; s#CardMarketURL: .*#CardMarketURL: $site#" ios/project.yml
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Make the Xcode project
+        run: |
+          brew install xcodegen >/dev/null
+          cd ios && xcodegen generate
+
+      - name: Build
+        run: |
+          cd ios
+          set -o pipefail
+          xcodebuild -project CardMarket.xcodeproj -target CardMarket -configuration Release -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" SYMROOT="$PWD/build" build 2>&1 | tee build.log | grep -E "error:|BUILD" || true
+          [ -d build/Release-iphoneos/CardMarket.app ] || {
+            grep -E "error:" build.log | head -25 | while read -r l; do echo "::error::${l//$PWD/}"; done
+            exit 1; }
+
+      - name: Pack the app
+        run: |
+          mkdir -p dist Payload
+          cp -R ios/build/Release-iphoneos/CardMarket.app Payload/
+          # a basic signature with an entitlements section: AltStore reads it, then signs with your Apple ID
+          codesign --force --sign - --timestamp=none --entitlements ios/entitlements.plist Payload/CardMarket.app
+          zip -qry "dist/CardMarket-${{ steps.v.outputs.version }}.ipa" Payload
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CardMarket-iPhone
+          path: dist/*.ipa
+
+      - name: Publish a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "app-${{ github.run_number }}" dist/*.ipa --repo "$GITHUB_REPOSITORY" \
+            --title "iPhone app build ${{ github.run_number }}" --notes "Install with AltStore: add this repo's source (see the README)." --latest
+
+      - name: Update the AltStore source
+        run: |
+          python3 .github/scripts/altstore_source.py "app-${{ github.run_number }}" "${{ steps.v.outputs.version }}" "${{ github.run_number }}" dist
+          git config user.name "card-market bot"
+          git config user.email "card-market@users.noreply.github.com"
+          git add altstore-source.json
+          git commit -q -m "AltStore source: build ${{ github.run_number }}" || exit 0
+          for i in 1 2 3; do git push -q origin HEAD:refs/heads/main && break; git pull -q --rebase origin main || true; done

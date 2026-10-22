@@ -1,0 +1,138 @@
+# Builds the price data and publishes the site to Cloudflare Pages.
+#
+# Daily (after TCGCSV refreshes around 20:00 UTC) it pulls every Pokémon price,
+# adds today to the history kept on the `data` branch, and deploys. A push to
+# main redeploys the site with the last data, without fetching prices again.
+#
+# Repo secrets: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, APP_PASSWORD.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", "functions/**", "data/**", ".github/workflows/deploy.yml"]
+  schedule:
+    - cron: "40 21 * * *"
+  workflow_dispatch:
+    inputs:
+      prices:
+        description: Fetch today's prices (otherwise reuse the last data)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  PROJECT: card-market
+  DATABASE: card-market
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Last data
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          ref: data
+          path: prev
+
+      - name: Fetch today's prices
+        id: prices
+        if: github.event_name == 'schedule' || inputs.prices || hashFiles('prev/meta.json') == ''
+        run: |
+          sudo apt-get install -y -qq p7zip-full >/dev/null
+          python3 data/build.py --prev prev --out site/data
+          echo "built=1" >> "$GITHUB_OUTPUT"
+
+      - name: Reuse the last data
+        if: steps.prices.outputs.built != '1'
+        run: |
+          mkdir -p site/data
+          cp -R prev/meta.json prev/sets.json prev/catalog.json prev/movers.json prev/set site/data/
+          du -sh site/data
+
+      - name: Save the data for tomorrow
+        if: steps.prices.outputs.built == '1'
+        run: |
+          cd site/data
+          du -sh . && ls set | wc -l
+          git init -q -b data
+          git config user.name "card-market bot"
+          git config user.email "card-market@users.noreply.github.com"
+          git add -A
+          git commit -qm "Prices $(jq -r .as_of meta.json)"
+          # one commit, replaced daily, so the repo doesn't grow
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" data
+          rm -rf .git
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cloudflare setup (first run makes the project and database)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Add the CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID repo secrets (see the README)."; exit 1; fi
+          npm i -g wrangler@3 >/dev/null 2>&1
+          wrangler pages project create "$PROJECT" --production-branch main 2>&1 | tail -2 || true
+          id=$(wrangler d1 list --json | jq -r --arg n "$DATABASE" '.[] | select(.name==$n) | .uuid')
+          if [ -z "$id" ]; then
+            wrangler d1 create "$DATABASE" | tail -5
+            id=$(wrangler d1 list --json | jq -r --arg n "$DATABASE" '.[] | select(.name==$n) | .uuid')
+          fi
+          [ -n "$id" ] || { echo "::error::Couldn't create the D1 database. Does the API token have D1 Edit?"; exit 1; }
+          cat > wrangler.toml <<EOF
+          name = "$PROJECT"
+          pages_build_output_dir = "site"
+          compatibility_date = "2026-09-01"
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "$DATABASE"
+          database_id = "$id"
+          EOF
+          cat wrangler.toml
+
+      - name: App password
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
+        run: |
+          if [ -z "$APP_PASSWORD" ]; then
+            echo "::warning::No APP_PASSWORD secret: the site will be open to anyone with the link."; exit 0; fi
+          printf '%s' "$APP_PASSWORD" | wrangler pages secret put APP_PASSWORD --project-name "$PROJECT" 2>&1 | tail -1
+
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          wrangler pages deploy site --project-name "$PROJECT" --branch main --commit-dirty=true 2>&1 | tail -5
+          sub=$(curl -fsS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PROJECT" | jq -r .result.subdomain)
+          echo "SITE=https://$sub" >> "$GITHUB_ENV"
+
+      - name: Check it works
+        run: |
+          sleep 15
+          echo "Site: $SITE"
+          curl -fsS "$SITE/data/meta.json" | jq -c '{as_of, products, sets, history_days}'
+          echo "TCGplayer from Cloudflare:"; curl -sS "$SITE/api/health" | jq -c . || true
+          {
+            echo "### Card Market is live: $SITE"
+            echo; echo "Prices as of $(curl -fsS "$SITE/data/meta.json" | jq -r .as_of)."
+            echo; echo "Comps check: \`$(curl -sS "$SITE/api/health")\`"
+          } >> "$GITHUB_STEP_SUMMARY"

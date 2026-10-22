@@ -1,0 +1,45 @@
+name: CardMarket
+options:
+  bundleIdPrefix: io.github.thebust3r
+  deploymentTarget:
+    iOS: '15.0'
+targets:
+  CardMarket:
+    type: application
+    platform: iOS
+    sources:
+    - CardMarket
+    info:
+      path: Config/CardMarket-Info.plist
+      properties:
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleDisplayName: Card Market
+        CardMarketURL: https://card-market.pages.dev
+        UILaunchScreen:
+          UIColorName: ''
+        UIApplicationSupportsIndirectInputEvents: true
+        UISupportedInterfaceOrientations:
+        - UIInterfaceOrientationPortrait
+        - UIInterfaceOrientationLandscapeLeft
+        - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+        - UIInterfaceOrientationPortrait
+        - UIInterfaceOrientationPortraitUpsideDown
+        - UIInterfaceOrientationLandscapeLeft
+        - UIInterfaceOrientationLandscapeRight
+        LSApplicationQueriesSchemes:
+        - altstore
+    settings:
+      base:
+        MARKETING_VERSION: 1.0.0
+        CURRENT_PROJECT_VERSION: '1'
+        TARGETED_DEVICE_FAMILY: 1,2
+        SWIFT_VERSION: '5.0'
+        CODE_SIGNING_ALLOWED: 'NO'
+        CODE_SIGNING_REQUIRED: 'NO'
+        CODE_SIGN_IDENTITY: ''
+        ENABLE_BITCODE: 'NO'
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.thebust3r.cardmarket
+        PRODUCT_NAME: CardMarket
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon

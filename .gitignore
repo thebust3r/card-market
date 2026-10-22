@@ -1,0 +1,11 @@
+__pycache__/
+/out/
+/site/data/
+/prev/
+wrangler.toml
+.wrangler/
+ios/build/
+ios/*.xcodeproj
+ios/Config/
+dist/
+Payload/
