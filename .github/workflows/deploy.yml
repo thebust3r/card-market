@@ -10,7 +10,7 @@ name: Deploy
 on:
   push:
     branches: [main]
-    paths: ["site/**", "functions/**", "data/**", ".github/workflows/deploy.yml"]
+    paths: ["site/**", "functions/**", "shared/**", "worker/**", "data/**", ".github/workflows/deploy.yml"]
   schedule:
     - cron: "40 21 * * *"
   workflow_dispatch:
@@ -125,12 +125,44 @@ jobs:
             "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/$PROJECT" | jq -r .result.subdomain)
           echo "SITE=https://$sub" >> "$GITHUB_ENV"
 
+      - name: Restock checker (runs every 5 minutes)
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          id=$(grep database_id wrangler.toml | cut -d'"' -f2)
+          cat > worker/wrangler.toml <<EOF
+          name = "card-market-restock"
+          main = "index.js"
+          compatibility_date = "2026-09-01"
+          workers_dev = false
+
+          [triggers]
+          crons = ["*/5 * * * *"]
+
+          [[d1_databases]]
+          binding = "DB"
+          database_name = "$DATABASE"
+          database_id = "$id"
+          EOF
+          cd worker
+          if ! wrangler deploy 2>&1 | tee ../worker-deploy.log | tail -4; then :; fi
+          if grep -qiE "error|authentication|permission" ../worker-deploy.log; then
+            echo "::warning::Couldn't set up the scheduled restock checker. Edit the Cloudflare API token and add Account · Workers Scripts · Edit (see the README). The Check now button in the app still works."
+          fi
+
       - name: Check it works
+        env:
+          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
         run: |
           sleep 15
           echo "Site: $SITE"
           curl -fsS "$SITE/data/meta.json" | jq -c '{as_of, products, sets, history_days}'
-          echo "TCGplayer from Cloudflare:"; curl -sS "$SITE/api/health?target=1" | jq -c . || true
+          echo "TCGplayer from Cloudflare:"; curl -sS "$SITE/api/health" | jq -c . || true
+          if [ -n "$APP_PASSWORD" ]; then
+            tok=$(printf '%s' "card-market-session-v1" | openssl dgst -sha256 -hmac "$APP_PASSWORD" -r | cut -d' ' -f1)
+            echo "Restock check from Cloudflare:"; curl -sS -X POST -H "Authorization: Bearer $tok" "$SITE/api/restock/run" | jq -c . || true
+          fi
           {
             echo "### Card Market is live: $SITE"
             echo; echo "Prices as of $(curl -fsS "$SITE/data/meta.json" | jq -r .as_of)."

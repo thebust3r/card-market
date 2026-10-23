@@ -112,10 +112,11 @@ const ICONS = {
   market: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>',
   ev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M3 12h18M8 8V5h8v3"/></svg>',
   collection: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="12" height="16" rx="2"/><path d="M8 21h10a2 2 0 0 0 2-2V7"/></svg>',
+  restock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>',
 };
 const MARK = '<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect x="5" y="2" width="22" height="28" rx="4" fill="var(--accent)"/><path d="M10 21l4-5 3 3 5-7" fill="none" stroke="var(--accent-ink)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-const TABS = [["comps", "Comps", "#/"], ["market", "Market", "#/market"], ["ev", "Box EV", "#/ev"], ["collection", "Collection", "#/collection"]];
+const TABS = [["comps", "Comps", "#/"], ["market", "Market", "#/market"], ["ev", "Box EV", "#/ev"], ["restock", "Restock", "#/restock"], ["collection", "Collection", "#/collection"]];
 
 function renderShell() {
   const nav = cls => TABS.map(([k, label, href]) => `<a href="${href}" data-tab="${k}">${ICONS[k]}<span>${label}</span></a>`).join("");
@@ -182,6 +183,7 @@ async function route() {
     if (page === "card") await pageCard(view, +parts[1], parts[2]);
     else if (page === "market") await pageMarket(view);
     else if (page === "ev") await pageEV(view, +parts[1] || null);
+    else if (page === "restock") await pageRestock(view);
     else if (page === "collection" && parts[1] === "sets") await pageSets(view, +parts[2] || null);
     else if (page === "collection") await pageCollection(view);
     else await pageHome(view);
@@ -850,6 +852,76 @@ async function pageSets(view, gid) {
     try { await api("/collection", {action: "add", pid: +b.dataset.have, sub: b.dataset.sub, qty: 1}); toast("Added to collection"); pageSets(view, gid); }
     catch (err) { b.disabled = false; toast(err.message); }
   };
+}
+
+// ================================================================ restock
+const ago = iso => { if (!iso) return "never"; const m = (Date.now() - Date.parse(iso)) / 6e4;
+  return m < 1 ? "just now" : m < 60 ? Math.round(m) + " min ago" : m < 1440 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " d ago"; };
+const TARGET_LINKS = [["Pokémon cards at Target", "https://www.target.com/s?searchTerm=pokemon+trading+cards&facetedValue=5zkty"],
+  ["Elite Trainer Boxes", "https://www.target.com/s?searchTerm=pokemon+elite+trainer+box"],
+  ["Delta Reign", "https://www.target.com/s?searchTerm=pokemon+delta+reign"]];
+async function pageRestock(view) {
+  view.innerHTML = '<div class="panel"><div class="skeleton" style="height:160px"></div></div>';
+  const r = await api("/restock");
+  const inStock = r.items.filter(i => i.available), run = r.lastRun;
+  const shopRow = sh => { const res = run?.shops?.find(x => x.name === sh.name);
+    return `<div class="prow"><div class="t"><div class="n">${esc(sh.name)}</div><div class="m">${esc(sh.url.replace(/^https:\/\//, ""))} · ${esc(sh.platform)}</div></div>
+      <div class="p">${!res ? '<span class="faint">not checked yet</span>' : res.error ? `<span class="down">failing</span><br><span class="faint small">${esc(res.error)}</span>`
+        : `<span class="up">working</span><br><span class="faint small">${res.items} watched · ${res.inStock} in stock</span>`}</div></div>`; };
+  view.innerHTML = `<div class="stack"><h1 class="page">Restock</h1>
+    <div class="stats">
+      <div class="stat"><div class="k">In stock now</div><div class="v">${inStock.length}</div><div class="s">of ${r.items.length} watched</div></div>
+      <div class="stat"><div class="k">Last check</div><div class="v" style="font-size:20px">${ago(run?.t)}</div><div class="s">${r.paused ? "paused" : "every 5 minutes"}</div></div>
+      <div class="stat"><div class="k">Phone alerts</div><div class="v" style="font-size:20px">${r.ntfyTopicSet ? "On" : "Off"}</div><div class="s">${r.ntfyTopicSet ? "ntfy " + esc(r.ntfyTopicHint) : "add your ntfy topic below"}</div></div>
+    </div>
+    <div class="actions"><button class="btn primary" id="rsRun">Check now</button><button class="btn" id="rsTest">Send test alert</button>
+      <button class="btn ghost" id="rsPause">${r.paused ? "Resume checks" : "Pause checks"}</button></div>
+    <div class="panel"><h2 class="sec">In stock now</h2><div class="list">${inStock.map(i => `<a class="prow" href="${esc(i.url)}" target="_blank" rel="noopener">
+        <div class="t"><div class="n">${esc(i.name)}</div><div class="m">${esc(i.shop)} · in stock since ${ago(i.last_change)}</div></div>
+        <div class="p"><b>${i.price ? money(i.price) : ""}</b><span class="faint">Open ↗</span></div></a>`).join("")
+      || '<div class="empty">Nothing sealed in stock at your shops right now. You\'ll get a push when that changes.</div>'}</div></div>
+    <div class="panel"><h2 class="sec">Target</h2>
+      <p class="note" style="margin-top:0">Target blocks automatic stock checks (it answers with a captcha), so these are quick links instead. On a product page, tap “Check other stores” to see stock near 72701.</p>
+      <div class="linkbar">${TARGET_LINKS.map(([l, u]) => `<a href="${u}" target="_blank" rel="noopener">${esc(l)} ↗</a>`).join("")}</div></div>
+    <div class="panel"><h2 class="sec">Recent activity</h2><div class="list">${r.events.slice(0, 30).map(e => `<a class="prow" href="${esc(e.url)}" target="_blank" rel="noopener">
+        <div class="t"><div class="n">${esc(e.name)}</div><div class="m">${esc(e.shop)} · ${new Date(e.t).toLocaleString(undefined, {month: "short", day: "numeric", hour: "numeric", minute: "2-digit"})}</div></div>
+        <div class="p"><span class="pill ${e.kind === "sold out" ? "down" : "up"}">${e.kind === "new" ? "New" : e.kind === "restock" ? "Restocked" : "Sold out"}</span></div></a>`).join("")
+      || '<div class="empty">No restocks seen yet.</div>'}</div></div>
+    <div class="panel"><h2 class="sec">Release reminders</h2>
+      <p class="note" style="margin-top:0">A push on the morning of a release (Central time), so you remember to check Target and the shops.</p>
+      <div class="list">${r.reminders.map((m, i) => `<div class="prow"><div class="t"><div class="n">${esc(m.text)}</div>
+        <div class="m">${esc(m.date)} at ${esc(m.time)}${m.sent ? " · sent" : ""}</div></div><div class="p"><button class="btn sm ghost" data-rmdel="${i}">Remove</button></div></div>`).join("") || '<div class="empty">No reminders.</div>'}</div>
+      <div class="form" style="margin-top:10px">
+        <div class="field"><label for="rmDate">Date</label><input class="input" id="rmDate" type="date"></div>
+        <div class="field"><label for="rmTime">Time</label><input class="input" id="rmTime" type="time" value="07:00"></div>
+        <div class="field" style="grid-column:1/-1"><label for="rmText">Message</label><input class="input" id="rmText" placeholder="e.g. Ascended Heroes is out today"></div>
+      </div><div class="actions" style="margin-top:10px"><button class="btn" id="rmAdd">Add reminder</button></div></div>
+    <div class="panel"><h2 class="sec">Shops</h2><div class="list">${r.shops.map(shopRow).join("")}</div>
+      <p class="note">Works with shops on Shopify or WooCommerce (most local card shops). Paste the shop's home page.</p>
+      <div class="form"><div class="field"><label for="shName">Name</label><input class="input" id="shName" placeholder="My LCS"></div>
+        <div class="field"><label for="shUrl">Website</label><input class="input" id="shUrl" placeholder="https://…" inputmode="url"></div>
+        <div class="field"><label for="shPlat">Platform</label><select class="input" id="shPlat"><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div></div>
+      <div class="actions" style="margin-top:10px"><button class="btn" id="shAdd">Add shop</button>${r.shops.length ? `<select class="input" id="shDelSel" style="width:auto">${r.shops.map((x, i) => `<option value="${i}">${esc(x.name)}</option>`).join("")}</select><button class="btn ghost" id="shDel">Remove</button>` : ""}</div></div>
+    <div class="panel"><h2 class="sec">Phone alerts</h2>
+      <p class="note" style="margin-top:0">Alerts go through <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy</a>, the same app your old notifier used. Put your topic name here (it's in your old config.toml under [notify]).</p>
+      <div class="form"><div class="field"><label for="ntTopic">ntfy topic</label><input class="input" id="ntTopic" autocomplete="off" autocapitalize="off" placeholder="${r.ntfyTopicSet ? "saved (" + esc(r.ntfyTopicHint) + "), type to replace" : "your-secret-topic"}"></div></div>
+      <div class="actions" style="margin-top:10px"><button class="btn primary" id="ntSave">Save</button></div></div>
+    <p class="faint small">Not checked automatically: Target, Walmart, GameStop and Pokémon Center all block automated stock checks.</p>
+  </div>`;
+  const save = async (body, msg) => { try { await api("/restock/settings", body); toast(msg); pageRestock(view); } catch (e) { toast(e.message); } };
+  $("#rsRun").onclick = async e => { e.target.disabled = true; e.target.textContent = "Checking…";
+    try { const s = await api("/restock/run", {}); toast(s.alerts ? `${s.alerts} alert${s.alerts > 1 ? "s" : ""} sent` : "Checked. Nothing new."); } catch (err) { toast(err.message); }
+    pageRestock(view); };
+  $("#rsTest").onclick = async () => { try { await api("/restock/test", {}); toast("Test alert sent. Check your phone."); } catch (e) { toast(e.message); } };
+  $("#rsPause").onclick = () => save({paused: !r.paused}, r.paused ? "Checks resumed" : "Checks paused");
+  $("#ntSave").onclick = () => { const v = $("#ntTopic").value.trim(); if (!v) return toast("Type your ntfy topic first"); save({ntfyTopic: v}, "Saved. Send a test alert to try it."); };
+  $("#rmAdd").onclick = () => { const d = $("#rmDate").value; if (!d) return toast("Pick a date");
+    save({reminders: [...r.reminders, {date: d, time: $("#rmTime").value || "07:00", text: $("#rmText").value.trim() || "Release day: check Target and the shops",
+      url: "https://www.target.com/s?searchTerm=pokemon+trading+cards"}]}, "Reminder added"); };
+  view.querySelectorAll("[data-rmdel]").forEach(b => b.onclick = () => save({reminders: r.reminders.filter((_, i) => i !== +b.dataset.rmdel)}, "Reminder removed"));
+  $("#shAdd").onclick = () => { const u = $("#shUrl").value.trim(); if (!/^https:\/\//.test(u)) return toast("Paste the shop's https:// address");
+    save({shops: [...r.shops, {name: $("#shName").value.trim() || new URL(u).hostname, url: u, platform: $("#shPlat").value}]}, "Shop added. Press Check now."); };
+  if ($("#shDel")) $("#shDel").onclick = () => save({shops: r.shops.filter((_, i) => i !== +$("#shDelSel").value)}, "Shop removed");
 }
 
 // ================================================================ login + boot

@@ -1,9 +1,0 @@
-# Diagnostic: shows what Target's stock lookup answers from GitHub's servers.
-name: Probe Target
-on: workflow_dispatch
-jobs:
-  probe:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: python3 .github/scripts/probe_target.py 72701

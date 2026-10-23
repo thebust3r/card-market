@@ -9,7 +9,14 @@
 //   GET  /api/comps?pid=&range=      TCGplayer sales history + latest sales
 //   GET  /api/health                 checks that TCGplayer answers from here
 //
+//   GET  /api/restock                what the restock checker sees, recent alerts, settings
+//   POST /api/restock/run            check the shops now
+//   POST /api/restock/settings       {ntfyTopic, ntfyServer, shops, paused}
+//   POST /api/restock/test           send a test push
+//
 // Bindings (set up by the deploy workflow): DB (D1), APP_PASSWORD (secret).
+
+import {runRestock, getSettings, notify, SCHEMA as RESTOCK_SCHEMA, DEFAULT_SHOPS, TZ} from "../../shared/restock.js";
 
 const TCG_HISTORY = (pid, range) => `https://infinite-api.tcgplayer.com/price/history/${pid}/detailed?range=${range}`;
 const TCG_SALES = pid => `https://mpapi.tcgplayer.com/v2/product/${pid}/latestsales`;
@@ -21,6 +28,7 @@ const TCG_HEADERS = {
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS watch (pid INTEGER, sub TEXT, added TEXT, PRIMARY KEY (pid, sub))`,
   `CREATE TABLE IF NOT EXISTS recents (pid INTEGER, sub TEXT, t INTEGER, PRIMARY KEY (pid, sub))`,
+  ...RESTOCK_SCHEMA,
   `CREATE TABLE IF NOT EXISTS collection (id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER, sub TEXT,
      qty INTEGER, condition TEXT, grade TEXT, cost REAL, bought TEXT, value_override REAL, note TEXT, added TEXT)`,
 ];
@@ -137,11 +145,6 @@ export async function onRequest({request, env, params}) {
       const out = {ok: true};
       try { out.history = (await salesHistory(696687, "month")).length > 0; } catch (e) { out.history = String(e.message); }
       try { out.sales = (await latestSales(696687, 1)).length > 0; } catch (e) { out.sales = String(e.message); }
-      if (url.searchParams.has("target")) {  // can Cloudflare reach Target's stock lookup?
-        const r = await fetch("https://redsky.target.com/redsky_aggregations/v1/web/fiats_v1?key=9f36aeafbe60771e321a7cc95a78140772ab3e96&tcin=91619960&nearby=72701&radius=25&limit=20",
-          {headers: {"User-Agent": TCG_HEADERS["User-Agent"], "Accept": "application/json", "Origin": "https://www.target.com", "Referer": "https://www.target.com/"}});
-        out.target = `${r.status} ${(await r.text()).slice(0, 160)}`;
-      }
       return json(out);
     }
     if (!(await authed(request, env))) return fail("Sign in first.", 401);
@@ -162,7 +165,44 @@ export async function onRequest({request, env, params}) {
       ]);
       return json({watch: w.results, collection: c.results, recents: r.results});
     }
+    if (path === "/restock" && method === "GET") {
+      const st = await getSettings(DB);
+      const [items, events] = await DB.batch([
+        DB.prepare("SELECT * FROM restock_items ORDER BY available DESC, last_change DESC"),
+        DB.prepare("SELECT * FROM restock_events ORDER BY id DESC LIMIT 60"),
+      ]);
+      const topic = st.ntfyTopic;
+      return json({items: items.results, events: events.results, lastRun: st.lastRun, paused: st.paused, shops: st.shops, reminders: st.reminders, tz: TZ,
+                   defaultShops: DEFAULT_SHOPS, ntfyServer: st.ntfyServer, ntfyTopicSet: !!topic, ntfyTopicHint: topic ? topic.slice(0, 3) + "…" : ""});
+    }
     if (method !== "POST") return fail("Not found", 404);
+    if (path === "/restock/run") return json(await runRestock(DB, {force: true}));
+    if (path === "/restock/test") {
+      const st = await getSettings(DB);
+      if (!st.ntfyTopic) return fail("Set your ntfy topic first.");
+      await notify(st, "Card Market test alert", "Restock alerts are working. You'll get one of these when something comes back in stock.", null);
+      return json({ok: true});
+    }
+    if (path === "/restock/settings") {
+      const b = await request.json(), stmts = [];
+      const put = (k, v) => stmts.push(DB.prepare("INSERT OR REPLACE INTO settings VALUES (?,?)").bind(k, v));
+      if (typeof b.ntfyTopic === "string") put("ntfy_topic", b.ntfyTopic.trim().slice(0, 64));
+      if (typeof b.ntfyServer === "string" && /^https:\/\//.test(b.ntfyServer)) put("ntfy_server", b.ntfyServer.trim());
+      if (typeof b.paused === "boolean") put("restock_paused", b.paused ? "1" : "0");
+      if (Array.isArray(b.shops)) {
+        const shops = b.shops.filter(x => x && /^https:\/\//.test(x.url) && ["shopify", "woocommerce"].includes(x.platform))
+          .slice(0, 10).map(x => ({name: String(x.name || new URL(x.url).hostname).slice(0, 60), url: x.url.replace(/\/+$/, ""), platform: x.platform}));
+        put("shops", JSON.stringify(shops));
+      }
+      if (Array.isArray(b.reminders)) {
+        const rem = b.reminders.filter(r => r && /^\d{4}-\d{2}-\d{2}$/.test(r.date)).slice(0, 20).map(r => ({
+          id: String(r.id || crypto.randomUUID()).slice(0, 40), date: r.date, time: /^\d{2}:\d{2}$/.test(r.time) ? r.time : "07:00",
+          text: String(r.text || "Release day").slice(0, 140), url: /^https:\/\//.test(r.url || "") ? r.url : null, sent: !!r.sent}));
+        put("reminders", JSON.stringify(rem));
+      }
+      if (stmts.length) await DB.batch(stmts);
+      return json({ok: true});
+    }
     const b = await request.json();
     const pid = parseInt(b.pid, 10), sub = String(b.sub || "Normal").slice(0, 60);
 

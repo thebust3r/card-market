@@ -11,6 +11,10 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / "site"
 STATE = {"watch": [], "collection": [], "recents": []}
+RESTOCK = {"items": [], "events": [], "lastRun": None, "paused": False, "reminders": [], "tz": "America/Chicago",
+           "shops": [{"name": "Gear Gaming Fayetteville", "url": "https://fayetteville.geargamingstore.com", "platform": "shopify"},
+                     {"name": "The Geek Realms", "url": "https://thegeekrealms.com", "platform": "woocommerce"}],
+           "ntfyServer": "https://ntfy.sh", "ntfyTopicSet": False, "ntfyTopicHint": ""}
 ARGS = None
 UA = {"User-Agent": "Mozilla/5.0", "Accept": "application/json", "Content-Type": "application/json"}
 
@@ -77,6 +81,8 @@ class H(SimpleHTTPRequestHandler):
         self.wfile.write(b)
 
     def do_GET(self):
+        if self.path.startswith("/api/restock"):
+            return self.send(RESTOCK)
         if self.path.startswith("/api/me"):
             return self.send(STATE)
         if self.path.startswith("/api/comps"):
@@ -91,6 +97,23 @@ class H(SimpleHTTPRequestHandler):
         b = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         p, now = self.path, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         pid, sub = int(b.get("pid") or 0), b.get("sub") or "Normal"
+        if p == "/api/restock/run":   # the real checker runs on Cloudflare; this just fakes a result
+            RESTOCK["lastRun"] = {"t": now, "shops": [{"name": x["name"], "ok": True, "items": 3, "inStock": 1} for x in RESTOCK["shops"]], "alerts": 0}
+            if not RESTOCK["items"]:
+                RESTOCK["items"] = [{"url": "https://example.com/p/etb", "shop": "Gear Gaming Fayetteville", "name": "Pokémon Delta Reign Elite Trainer Box",
+                                     "available": 1, "last_change": now, "price": 59.99}]
+                RESTOCK["events"] = [{"t": now, "kind": "restock", "shop": "Gear Gaming Fayetteville", "name": "Pokémon Delta Reign Elite Trainer Box",
+                                      "url": "https://example.com/p/etb", "price": 59.99}]
+            return self.send(RESTOCK["lastRun"])
+        if p == "/api/restock/test":
+            return self.send({"ok": True})
+        if p == "/api/restock/settings":
+            for k in ("paused", "shops", "reminders"):
+                if k in b:
+                    RESTOCK[k] = b[k]
+            if b.get("ntfyTopic"):
+                RESTOCK["ntfyTopicSet"], RESTOCK["ntfyTopicHint"] = True, b["ntfyTopic"][:3] + "…"
+            return self.send({"ok": True})
         if p == "/api/login":
             return self.send({"token": "dev"})
         if p == "/api/watch":

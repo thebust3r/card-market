@@ -15,6 +15,9 @@ so they always match.
   what you keep after TCGplayer, eBay or PayPal fees, and whether grading pays off.
 - **Deals**: daily list of listings well under market price for things that still sell.
 - **Cheapest packs**: cost per pack across every sealed product in a set, next to Box EV.
+- **Restock**: checks your local card shops (Shopify or WooCommerce) every 5 minutes and pushes to your
+  phone through ntfy when sealed Pokémon product comes back or shows up, plus release-day reminders.
+  Target, Walmart, GameStop and Pokémon Center block automated checks, so Target gets quick links instead.
 - **Collection**: what you own, what you paid, what it's worth now, CSV export, and a set tracker
   (what's missing from a set and what it costs to finish).
 
@@ -34,7 +37,8 @@ All of it fits in the free tiers of GitHub and Cloudflare.
 ## Setup (once)
 
 1. **Cloudflare**: make a free account at <https://dash.cloudflare.com>. Under *My Profile → API Tokens*,
-   create a token with **Account · Cloudflare Pages · Edit** and **Account · D1 · Edit**. Copy the token
+   create a token with **Account · Cloudflare Pages · Edit**, **Account · D1 · Edit** and
+   **Account · Workers Scripts · Edit** (the last one runs the 5-minute restock checker). Copy the token
    and your **Account ID** (it's on the right side of the dashboard home page).
 2. **GitHub secrets**: in this repo, open *Settings → Secrets and variables → Actions* and add:
    - `CLOUDFLARE_API_TOKEN`
