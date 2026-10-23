@@ -42,7 +42,7 @@ async function api(path, body) {
 
 // ================================================================ data
 const D = {meta: null, catalog: [], sets: new Map(), byPid: new Map(), setFiles: new Map(), movers: null};
-let ME = store.get("me", {watch: [], collection: [], recents: []});
+let ME = store.get("me", {watch: [], collection: [], recents: [], showcase: []});
 
 async function getJSON(url) {
   const r = await fetch(url);
@@ -184,6 +184,7 @@ async function route() {
     else if (page === "market") await pageMarket(view);
     else if (page === "ev") await pageEV(view, +parts[1] || null);
     else if (page === "restock") await pageRestock(view);
+    else if (page === "collection" && parts[1] === "showcase") await pageShowcase(view);
     else if (page === "collection" && parts[1] === "sets") await pageSets(view, +parts[2] || null);
     else if (page === "collection") await pageCollection(view);
     else await pageHome(view);
@@ -740,6 +741,7 @@ async function pageCollection(view) {
     const y = !c.grade && it?.forecast.ok ? it.forecast.points[3].price : each;
     year += (y || 0) * c.qty;
   }
+  const shown = new Set(ME.showcase || []);
   view.innerHTML = `<div class="stack">${collHead("mine")}
     <div class="stats">
       <div class="stat"><div class="k">Items</div><div class="v">${count}</div><div class="s">${unpriced ? unpriced + " without a value" : " "}</div></div>
@@ -755,7 +757,7 @@ async function pageCollection(view) {
           <div class="m">${esc(it?.set?.name || "")} · ${esc(c.grade || c.condition || "")}${c.sub !== "Normal" ? " · " + esc(c.sub) : ""}</div>
           <div class="m">${c.cost != null ? "paid " + money(c.cost) + " ea" : "paid ?"}${c.bought ? " · " + esc(c.bought) : ""}${c.note ? " · " + esc(c.note) : ""}</div></a>
         <div class="p"><b>${c._value != null ? money(c._value) : '<span class="faint">set value</span>'}</b><span>${pl != null ? signed(pl) : ""}</span>
-          <button class="btn sm ghost" data-edit="${c.id}" style="margin-top:4px">Edit</button></div></div><div id="edit-${c.id}"></div></div>`;
+          <span class="rowbtns"><button class="star${shown.has(c.id) ? " on" : ""}" data-star="${c.id}" title="Showcase" aria-label="Showcase" aria-pressed="${shown.has(c.id)}">★</button><button class="btn sm ghost" data-edit="${c.id}">Edit</button></span></div></div><div id="edit-${c.id}"></div></div>`;
     }).join("") : '<div class="empty">Nothing yet. Open any card and press “+ Collection”.</div>'}</div></div></div>`;
   $("#csv").onclick = () => {
     const lines = [["name", "set", "printing", "qty", "condition", "grade", "paid_each", "bought", "value_each", "value", "note", "tcgplayer"]];
@@ -766,6 +768,13 @@ async function pageCollection(view) {
     a.download = "pokemon-collection.csv"; a.click();
   };
   view.onclick = async e => {
+    const st = e.target.closest("[data-star]");
+    if (st) {
+      const id = +st.dataset.star, on = !st.classList.contains("on");
+      st.classList.toggle("on", on); st.setAttribute("aria-pressed", on);
+      try { await toggleShowcase(id, on); toast(on ? "Added to Showcase" : "Removed from Showcase"); } catch (err) { st.classList.toggle("on", !on); toast(err.message); }
+      return;
+    }
     const b = e.target.closest("[data-edit]");
     if (b) {
       const c = ME.collection.find(x => x.id === +b.dataset.edit), box = $("#edit-" + c.id);
@@ -793,7 +802,131 @@ async function pageCollection(view) {
 }
 
 const collHead = on => `<div class="head" style="margin:0"><h1 class="page" style="margin:0">Collection</h1><div class="right"><div class="seg">
-  <a href="#/collection" class="${on === "mine" ? "on" : ""}">My cards</a><a href="#/collection/sets${store.get("setGid", null) ? "/" + store.get("setGid") : ""}" class="${on === "sets" ? "on" : ""}">Set tracker</a></div></div></div>`;
+  <a href="#/collection" class="${on === "mine" ? "on" : ""}">My cards</a><a href="#/collection/showcase" class="${on === "showcase" ? "on" : ""}">Showcase</a><a href="#/collection/sets${store.get("setGid", null) ? "/" + store.get("setGid") : ""}" class="${on === "sets" ? "on" : ""}">Set tracker</a></div></div></div>`;
+
+async function toggleShowcase(id, on) {
+  await api("/showcase", {id, on});
+  ME.showcase = on ? [...(ME.showcase || []).filter(x => x !== id), id] : (ME.showcase || []).filter(x => x !== id);
+  store.set("me", ME);
+}
+
+// ================================================================ showcase
+// The cards worth showing off: big images in top loaders (or slabs, when graded),
+// current values, a tap-to-zoom view, and a "hide prices" switch for showing people at a table.
+const bigImg = pid => `https://tcgplayer-cdn.tcgplayer.com/product/${pid}_in_1000x1000.jpg`;
+let scSort = store.get("scSort", "mine"), scHide = store.get("scHide", false), scArrange = false;
+
+async function pageShowcase(view, fresh = true) {
+  if (fresh) {
+    view.innerHTML = `<div class="stack">${collHead("showcase")}<div class="panel"><div class="skeleton" style="height:320px"></div></div></div>`;
+    await refreshMe();
+  }
+  const byId = new Map((ME.collection || []).map(c => [c.id, c]));
+  const load = async c => {
+    const it = D.byPid.has(c.pid) ? await item(c.pid, c.sub).catch(() => null) : null;
+    const raw = it?.now ?? null, each = c.value_override ?? (c.grade ? null : raw);
+    return {c, it, raw, each, value: each != null ? each * c.qty : null};
+  };
+  let cards = await Promise.all((ME.showcase || []).filter(id => byId.has(id)).map(id => load(byId.get(id))));
+  const shownIds = new Set(cards.map(x => x.c.id));
+  const rest = (await Promise.all((ME.collection || []).filter(c => !shownIds.has(c.id)).map(load))).sort((a, b) => (b.each ?? b.raw ?? 0) - (a.each ?? a.raw ?? 0));
+
+  const total = cards.reduce((t, x) => t + (x.value || 0), 0);
+  const top = cards.reduce((m, x) => (x.each ?? 0) > (m?.each ?? 0) ? x : m, null);
+  const sorted = scSort === "value" ? [...cards].sort((a, b) => (b.each ?? b.raw ?? 0) - (a.each ?? a.raw ?? 0)) : cards;
+
+  const priceLine = x => {
+    if (scHide) return "";
+    if (x.each != null) return `<div class="sc-v"><b class="num">${money(x.each)}</b>${x.c.qty > 1 ? `<span class="faint">×${x.c.qty}</span>` : ""}${!x.c.value_override && x.it?.ch30 != null ? " " + pct(x.it.ch30) : ""}</div>`;
+    return `<div class="sc-v"><span class="faint">${x.raw != null ? "raw " + money(x.raw) : "no price"}${x.c.grade ? " · set the slab value in Edit" : ""}</span></div>`;
+  };
+  const tile = (x, i) => {
+    const {c, it} = x, graded = !!c.grade;
+    return `<figure class="sc-card" data-i="${i}">
+      <button class="sc-hold ${graded ? "slab" : "loader"}" data-zoom="${i}" aria-label="View ${esc(it?.name || "card")} larger">
+        ${graded ? `<div class="sc-label"><span>${esc(it?.name || "")}</span><b>${esc(c.grade)}</b></div>` : ""}
+        <div class="sc-face"><img src="${img(c.pid, 400)}" alt="${esc(it?.name || "")}" loading="lazy" onerror="this.style.visibility='hidden'"><i class="sc-shine"></i></div>
+      </button>
+      ${scArrange ? `<div class="sc-arrange"><button class="btn sm" data-mv="${c.id}" data-d="-1" aria-label="Move earlier"${i === 0 ? " disabled" : ""}>◀</button>
+        <button class="btn sm" data-unstar="${c.id}">Remove</button><button class="btn sm" data-mv="${c.id}" data-d="1" aria-label="Move later"${i === sorted.length - 1 ? " disabled" : ""}>▶</button></div>` : ""}
+      <figcaption><a href="#/card/${c.pid}/${encodeURIComponent(c.sub)}" class="sc-n">${esc(it?.name || "#" + c.pid)}</a>
+        <div class="sc-m">${esc(it?.set?.name || "")}${it?.number ? " · " + esc(it.number) : ""}${c.sub !== "Normal" ? " · " + esc(c.sub) : ""}</div>${priceLine(x)}</figcaption></figure>`;
+  };
+
+  view.innerHTML = `<div class="stack">${collHead("showcase")}
+    ${cards.length ? `<div class="sc-hero">
+      <div><div class="sc-kicker">Showcase</div><div class="sc-big num">${scHide ? cards.length + (cards.length === 1 ? " card" : " cards") : money(total)}</div>
+        <div class="sc-sub">${scHide ? "prices hidden" : `${cards.length} ${cards.length === 1 ? "card" : "cards"}${top && top.each ? ` · top card ${money(top.each)}` : ""}`}</div></div>
+      <div class="sc-tools"><div class="seg"><button data-sort="mine" class="${scSort === "mine" ? "on" : ""}">My order</button><button data-sort="value" class="${scSort === "value" ? "on" : ""}">Value</button></div>
+        <button class="btn sm" id="scHide">${scHide ? "Show prices" : "Hide prices"}</button>
+        ${scSort === "mine" && cards.length > 1 ? `<button class="btn sm${scArrange ? " primary" : ""}" id="scArr">${scArrange ? "Done" : "Arrange"}</button>` : ""}</div></div>
+    <div class="sc-case"><div class="sc-grid">${sorted.map(tile).join("")}</div></div>`
+    : `<div class="sc-case sc-empty"><div class="sc-hold loader ghost"><div class="sc-face"></div></div>
+        <div><h2 class="sec" style="margin:0 0 4px">Your top-loaded favorites go here</h2>
+        <p class="faint" style="margin:0">Pick cards below, or tap ★ next to anything on My cards. Graded cards show as slabs once you put the grade in Edit.</p></div></div>`}
+    <div class="panel"><div class="head"><h2 class="sec">Add from your collection</h2></div>
+      <div class="list">${rest.length ? rest.slice(0, 60).map(x => `<div class="prow">${thumb(x.c.pid)}<a class="t" href="#/card/${x.c.pid}/${encodeURIComponent(x.c.sub)}" style="text-decoration:none">
+          <div class="n">${esc(x.it?.name || "#" + x.c.pid)}</div><div class="m">${esc(x.it?.set?.name || "")} · ${esc(x.c.grade || x.c.condition || "")}</div></a>
+          <div class="p"><b>${money(x.each ?? x.raw)}</b><button class="btn sm" data-add="${x.c.id}">★ Showcase</button></div></div>`).join("")
+        : `<div class="empty">${(ME.collection || []).length ? "Everything in your collection is already in the Showcase." : "Your collection is empty. Open any card and press “+ Collection” first."}</div>`}</div></div></div>
+    <div class="sc-zoom" id="scZoom" hidden></div>`;
+
+  const redraw = () => pageShowcase(view, false);
+  const grid = $(".sc-grid", view);
+  // Holo tilt that follows the finger or mouse.
+  if (grid && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    grid.addEventListener("pointermove", e => {
+      const h = e.target.closest(".sc-hold"); if (!h) return;
+      const r = h.getBoundingClientRect(), px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+      h.style.setProperty("--rx", ((.5 - py) * 14).toFixed(2) + "deg"); h.style.setProperty("--ry", ((px - .5) * 16).toFixed(2) + "deg");
+      h.style.setProperty("--mx", (px * 100).toFixed(1) + "%"); h.style.setProperty("--my", (py * 100).toFixed(1) + "%");
+      h.classList.add("live");
+    });
+    grid.addEventListener("pointerout", e => { const h = e.target.closest(".sc-hold"); if (h && !h.contains(e.relatedTarget)) { h.classList.remove("live"); h.style.removeProperty("--rx"); h.style.removeProperty("--ry"); } });
+  }
+  const zoom = $("#scZoom");
+  const openZoom = i => {
+    const x = sorted[i]; if (!x) return;
+    zoom.innerHTML = `<button class="sc-x" aria-label="Close">✕</button>
+      ${sorted.length > 1 ? `<button class="sc-nav prev" aria-label="Previous">‹</button><button class="sc-nav next" aria-label="Next">›</button>` : ""}
+      <div class="sc-zbody"><img src="${bigImg(x.c.pid)}" alt="${esc(x.it?.name || "")}" onerror="this.onerror=null;this.src='${img(x.c.pid, 400)}'">
+        <div class="sc-zcap"><b>${esc(x.it?.name || "")}</b><span>${esc(x.it?.set?.name || "")}${x.c.grade ? " · " + esc(x.c.grade) : ""}</span>
+        ${scHide ? "" : `<span class="num">${x.each != null ? money(x.each) : x.raw != null ? "raw " + money(x.raw) : ""}</span>`}</div></div>`;
+    zoom.dataset.i = i; zoom.hidden = false; document.body.style.overflow = "hidden";
+  };
+  const closeZoom = () => { zoom.hidden = true; zoom.innerHTML = ""; document.body.style.overflow = ""; };
+  const step = d => openZoom((+zoom.dataset.i + d + sorted.length) % sorted.length);
+  zoom.onclick = e => {
+    if (e.target.closest(".sc-nav")) return step(e.target.closest(".next") ? 1 : -1);
+    if (e.target.closest(".sc-x") || !e.target.closest(".sc-zbody img")) closeZoom();
+  };
+  let sx = null;
+  zoom.addEventListener("touchstart", e => { sx = e.touches[0].clientX; }, {passive: true});
+  zoom.addEventListener("touchend", e => { if (sx == null) return; const dx = e.changedTouches[0].clientX - sx; sx = null; if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1); });
+  document.onkeydown = e => { if (zoom.hidden || !document.body.contains(zoom)) return; if (e.key === "Escape") closeZoom(); if (e.key === "ArrowRight") step(1); if (e.key === "ArrowLeft") step(-1); };
+
+  view.onclick = async e => {
+    const t = e.target;
+    if (t.closest("[data-zoom]") && !scArrange) return openZoom(+t.closest("[data-zoom]").dataset.zoom);
+    const so = t.closest("[data-sort]");
+    if (so) { scSort = so.dataset.sort; store.set("scSort", scSort); scArrange = false; return redraw(); }
+    if (t.closest("#scHide")) { scHide = !scHide; store.set("scHide", scHide); return redraw(); }
+    if (t.closest("#scArr")) { scArrange = !scArrange; return redraw(); }
+    const add = t.closest("[data-add]"), un = t.closest("[data-unstar]"), mv = t.closest("[data-mv]");
+    try {
+      if (add) { add.disabled = true; await toggleShowcase(+add.dataset.add, true); toast("Added to Showcase"); return redraw(); }
+      if (un) { await toggleShowcase(+un.dataset.unstar, false); toast("Removed from Showcase"); return redraw(); }
+      if (mv) {
+        const ids = cards.map(x => x.c.id), i = ids.indexOf(+mv.dataset.mv), j = i + +mv.dataset.d;
+        if (j < 0 || j >= ids.length) return;
+        [ids[i], ids[j]] = [ids[j], ids[i]];
+        ME.showcase = ids; store.set("me", ME);
+        await api("/showcase", {order: ids});
+        return redraw();
+      }
+    } catch (err) { toast(err.message); }
+  };
+}
 
 // ================================================================ set tracker
 let setScope = store.get("setScope", "main");

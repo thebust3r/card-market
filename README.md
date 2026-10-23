@@ -18,7 +18,7 @@ so they always match.
 - **Restock**: checks your local card shops (Shopify or WooCommerce) every 5 minutes and pushes to your
   phone through ntfy when sealed Pokémon product comes back or shows up, plus release-day reminders.
   Target, Walmart, GameStop and Pokémon Center block automated checks, so Target gets quick links instead.
-- **Collection**: what you own, what you paid, what it's worth now, CSV export, and a set tracker
+- **Collection**: what you own, what you paid, what it's worth now, CSV export, a set tracker, and a Showcase gallery of your favorite cards (top loaders and slabs, tap to zoom, hide prices when showing people)
   (what's missing from a set and what it costs to finish).
 
 Search works offline with bad signal at a show. Comps need a connection.

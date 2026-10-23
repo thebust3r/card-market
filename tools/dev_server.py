@@ -10,7 +10,7 @@ import argparse, json, mimetypes, pathlib, time, urllib.request
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / "site"
-STATE = {"watch": [], "collection": [], "recents": []}
+STATE = {"watch": [], "collection": [], "recents": [], "showcase": []}
 RESTOCK = {"items": [], "events": [], "lastRun": None, "paused": False, "reminders": [], "tz": "America/Chicago",
            "shops": [{"name": "Gear Gaming Fayetteville", "url": "https://fayetteville.geargamingstore.com", "platform": "shopify"},
                      {"name": "The Geek Realms", "url": "https://thegeekrealms.com", "platform": "woocommerce"}],
@@ -137,6 +137,14 @@ class H(SimpleHTTPRequestHandler):
                     row.update({k: b.get(k) for k in fields})
             if b["action"] == "delete":
                 STATE["collection"] = [r for r in STATE["collection"] if r["id"] != b.get("id")]
+                STATE["showcase"] = [i for i in STATE["showcase"] if i != b.get("id")]
+        elif p == "/api/showcase":
+            if "order" in b:
+                STATE["showcase"] = [int(i) for i in b["order"] if int(i) in STATE["showcase"]]
+            elif b.get("on") is False:
+                STATE["showcase"] = [i for i in STATE["showcase"] if i != int(b["id"])]
+            elif int(b["id"]) not in STATE["showcase"]:
+                STATE["showcase"].append(int(b["id"]))
         else:
             return self.send({"error": "Not found"}, 404)
         self.send({"ok": True})

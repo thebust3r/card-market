@@ -6,6 +6,7 @@
 //   POST /api/watch                  {pid, sub, on}
 //   POST /api/recent                 {pid, sub}
 //   POST /api/collection             {action: add|update|delete, ...}
+//   POST /api/showcase               {id, on} pin/unpin a collection card, or {order: [ids]}
 //   GET  /api/comps?pid=&range=      TCGplayer sales history + latest sales
 //   GET  /api/health                 checks that TCGplayer answers from here
 //
@@ -31,6 +32,7 @@ const SCHEMA = [
   ...RESTOCK_SCHEMA,
   `CREATE TABLE IF NOT EXISTS collection (id INTEGER PRIMARY KEY AUTOINCREMENT, pid INTEGER, sub TEXT,
      qty INTEGER, condition TEXT, grade TEXT, cost REAL, bought TEXT, value_override REAL, note TEXT, added TEXT)`,
+  `CREATE TABLE IF NOT EXISTS showcase (cid INTEGER PRIMARY KEY, pos INTEGER)`,
 ];
 let schemaReady = false;
 
@@ -158,12 +160,13 @@ export async function onRequest({request, env, params}) {
 
     const DB = await db(env);
     if (path === "/me" && method === "GET") {
-      const [w, c, r] = await DB.batch([
+      const [w, c, r, sc] = await DB.batch([
         DB.prepare("SELECT pid, sub, added FROM watch ORDER BY added"),
         DB.prepare("SELECT * FROM collection ORDER BY added DESC"),
         DB.prepare("SELECT pid, sub, t FROM recents ORDER BY t DESC LIMIT 40"),
+        DB.prepare("SELECT s.cid FROM showcase s JOIN collection c ON c.id = s.cid ORDER BY s.pos, s.cid"),
       ]);
-      return json({watch: w.results, collection: c.results, recents: r.results});
+      return json({watch: w.results, collection: c.results, recents: r.results, showcase: sc.results.map(x => x.cid)});
     }
     if (path === "/restock" && method === "GET") {
       const st = await getSettings(DB);
@@ -237,7 +240,7 @@ export async function onRequest({request, env, params}) {
       const id = parseInt(b.id, 10);
       if (!id) return fail("id missing");
       if (b.action === "delete") {
-        await DB.prepare("DELETE FROM collection WHERE id=?").bind(id).run();
+        await DB.batch([DB.prepare("DELETE FROM collection WHERE id=?").bind(id), DB.prepare("DELETE FROM showcase WHERE cid=?").bind(id)]);
         return json({ok: true});
       }
       if (b.action === "update") {
@@ -246,6 +249,18 @@ export async function onRequest({request, env, params}) {
         return json({ok: true});
       }
       return fail("Unknown action");
+    }
+    if (path === "/showcase") {
+      if (Array.isArray(b.order)) {
+        const ids = b.order.map(x => parseInt(x, 10)).filter(Boolean).slice(0, 500);
+        if (ids.length) await DB.batch(ids.map((id, i) => DB.prepare("UPDATE showcase SET pos=? WHERE cid=?").bind(i, id)));
+        return json({ok: true});
+      }
+      const id = parseInt(b.id, 10);
+      if (!id) return fail("id missing");
+      if (b.on === false) await DB.prepare("DELETE FROM showcase WHERE cid=?").bind(id).run();
+      else await DB.prepare("INSERT OR IGNORE INTO showcase VALUES (?, (SELECT COALESCE(MAX(pos), -1) + 1 FROM showcase))").bind(id).run();
+      return json({ok: true});
     }
     return fail("Not found", 404);
   } catch (e) {
