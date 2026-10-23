@@ -130,7 +130,7 @@ jobs:
           sleep 15
           echo "Site: $SITE"
           curl -fsS "$SITE/data/meta.json" | jq -c '{as_of, products, sets, history_days}'
-          echo "TCGplayer from Cloudflare:"; curl -sS "$SITE/api/health" | jq -c . || true
+          echo "TCGplayer from Cloudflare:"; curl -sS "$SITE/api/health?target=1" | jq -c . || true
           {
             echo "### Card Market is live: $SITE"
             echo; echo "Prices as of $(curl -fsS "$SITE/data/meta.json" | jq -r .as_of)."

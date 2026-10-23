@@ -137,6 +137,11 @@ export async function onRequest({request, env, params}) {
       const out = {ok: true};
       try { out.history = (await salesHistory(696687, "month")).length > 0; } catch (e) { out.history = String(e.message); }
       try { out.sales = (await latestSales(696687, 1)).length > 0; } catch (e) { out.sales = String(e.message); }
+      if (url.searchParams.has("target")) {  // can Cloudflare reach Target's stock lookup?
+        const r = await fetch("https://redsky.target.com/redsky_aggregations/v1/web/fiats_v1?key=9f36aeafbe60771e321a7cc95a78140772ab3e96&tcin=91619960&nearby=72701&radius=25&limit=20",
+          {headers: {"User-Agent": TCG_HEADERS["User-Agent"], "Accept": "application/json", "Origin": "https://www.target.com", "Referer": "https://www.target.com/"}});
+        out.target = `${r.status} ${(await r.text()).slice(0, 160)}`;
+      }
       return json(out);
     }
     if (!(await authed(request, env))) return fail("Sign in first.", 401);
